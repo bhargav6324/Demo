@@ -73,6 +73,12 @@ class SearchResult(BaseModel):
     total: int
 
 
+class CatalogSearchResult(SearchResult):
+    """search_catalog tool output: set when requested filters matched nothing and were dropped."""
+    filters_relaxed: dict[str, str] | None = None
+    note: str | None = None
+
+
 class ResourceContent(BaseModel):
     """GET /resources/{id}/content."""
     resource_id: str

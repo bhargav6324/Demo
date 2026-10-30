@@ -6,6 +6,7 @@ from datetime import timedelta
 from app.adapters.errors import ToolError
 from app.schemas.library import (
     AnalyticsSummary,
+    CatalogSearchResult,
     Availability,
     Loan,
     Reservation,
@@ -34,8 +35,11 @@ def _schema(properties: dict | None = None, required: list[str] | None = None) -
 
 _SEARCH_PROPS = {
     "query": {"type": "string", "minLength": 1, "maxLength": 200, "description": "Natural-language or keyword query."},
-    "type": {"type": "string", "enum": _RESOURCE_TYPES, "description": "Optional resource type filter."},
-    "level": {"type": "string", "enum": _LEVELS, "description": "Optional difficulty level filter."},
+    "type": {"type": "string", "enum": _RESOURCE_TYPES,
+             "description": "Only if the user explicitly asks for this type (e.g. 'papers', 'journals'). "
+                            "Omit when looking up a title: you don't know its type."},
+    "level": {"type": "string", "enum": _LEVELS,
+              "description": "Only if the user explicitly asks for this level (e.g. 'beginner')."},
     "limit": {"type": "integer", "minimum": 1, "maximum": 20, "description": "Max results (default 5)."},
 }
 
@@ -138,7 +142,7 @@ def build_registry() -> ToolRegistry:
         name="search_catalog",
         description="Keyword search over the verified library catalog (books, e-books, journals, papers, dissertations). Use short keywords or a title fragment. Returns catalog records only, not availability.",
         input_schema=_schema(_SEARCH_PROPS, ["query"]),
-        handler=_search_catalog, output_type=SearchResult,
+        handler=_search_catalog, output_type=CatalogSearchResult,
     ))
     reg.register(ToolSpec(
         name="get_resource",

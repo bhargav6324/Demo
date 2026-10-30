@@ -84,6 +84,20 @@ async def longest_waitlists(adapter: LibraryToolAdapter, user: UserContext | Non
 
 async def search_catalog(adapter: LibraryToolAdapter, user: UserContext | None, query: str, *,
                          limit: int = 5, type: str | None = None, level: str | None = None) -> dict:
+    result = await _search(adapter, user, query, limit=limit, type=type, level=level)
+    if result["items"] or not (type or level):
+        return result
+    # A guessed filter (e.g. type="book" for what is really a journal) must not hide a real
+    # title: retry without filters and say so, so the answer can explain the mismatch.
+    relaxed = await _search(adapter, user, query, limit=limit)
+    if relaxed["items"]:
+        relaxed["filters_relaxed"] = {k: v for k, v in (("type", type), ("level", level)) if v}
+        relaxed["note"] = "No matches with the requested filters; these results ignore them."
+    return relaxed if relaxed["items"] else result
+
+
+async def _search(adapter: LibraryToolAdapter, user: UserContext | None, query: str, *,
+                  limit: int, type: str | None = None, level: str | None = None) -> dict:
     phrase = query.strip().lower()
     kws = keywords(query)
     terms = list(dict.fromkeys([phrase, *kws]))  # phrase first, de-duplicated

@@ -228,9 +228,13 @@ def _describe_action(result: ToolResult) -> tuple[str, str]:
                                    f"available now; one will be held for pickup at {branch}.")
         # The priority queue (faculty > researcher > student, FIFO within a role) means the
         # exact position is only known after the backend places the hold.
+        if a["waitlist_count"] == 0:
+            return "reservation", (f"Reserve '{title}'. No copies are available now; nobody is waiting yet, "
+                                   "so you'll be first on the waitlist.")
         situation = ("No copies are available now" if a["available_copies"] == 0
                      else "Copies are free, but other patrons are already waiting for them")
-        return "reservation", (f"Reserve '{title}'. {situation}; {a['waitlist_count']} already waiting. "
+        waiting = "1 person is" if a["waitlist_count"] == 1 else f"{a['waitlist_count']} people are"
+        return "reservation", (f"Reserve '{title}'. {situation}; {waiting} already waiting. "
                                "Your request joins the priority waitlist (faculty, then researchers, then "
                                "students) and the library confirms your position.")
     loan = d["loan"]

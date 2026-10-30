@@ -30,6 +30,19 @@ async def test_exact_title_phrase(adapter):
     assert res["items"][0].resource_id == "res-004"
 
 
+async def test_wrong_type_guess_does_not_hide_the_title(adapter):
+    # "Machine Learning for Absolute Beginners" is a book; the model guesses "journal"
+    res = await search_catalog(adapter, None, "Machine Learning for Absolute Beginners", type="journal")
+    assert res["items"][0].resource_id == "res-006"
+    assert res["filters_relaxed"] == {"type": "journal"} and res["note"]
+
+
+async def test_matching_filter_is_kept(adapter):
+    res = await search_catalog(adapter, None, "machine learning", type="book", level="beginner")
+    assert res["items"] and "filters_relaxed" not in res
+    assert all(r.type == "book" and r.level == "beginner" for r in res["items"])
+
+
 async def test_filters_passed_to_backend(adapter):
     res = await search_catalog(adapter, None, "learning", type="paper")
     assert all(r.type == "paper" for r in res["items"])
