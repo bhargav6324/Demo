@@ -2,7 +2,7 @@
 
 The AI integration and orchestration module of the **AI-Powered Smart Library Management Assistant** (HCLTech Future Ready AI Engineer Hackathon).
 
-It is a FastAPI service on `http://localhost:8001/api/v1`. It turns natural-language questions into **validated tool calls** against the library backend, then returns **grounded, cited, schema-stable** answers to the frontend.
+It is a FastAPI service on `http://localhost:8002/api/v1` (port 8002; the backend uses 8001). It turns natural-language questions into **validated tool calls** against the library backend, then returns **grounded, cited, schema-stable** answers to the frontend.
 
 It runs fully standalone against a mock backend. Switching to the real backend is a **configuration change only**.
 
@@ -61,8 +61,27 @@ python -m venv .venv
 .venv/Scripts/python -m pip install -r requirements.txt
 cp .env.example .env            # then set GEMINI_API_KEY (or LLM_PROVIDER=fake)
 
-.venv/Scripts/python -m uvicorn app.main:app --port 8001
+.venv/Scripts/python -m app    # listens on SERVICE_HOST:SERVICE_PORT from .env (default 127.0.0.1:8002)
 ```
+
+### Sharing with teammates over Tailscale
+
+The default `127.0.0.1` is reachable only from your own PC. To let the frontend and backend teammates call the service:
+
+1. Find your Tailscale IP with `tailscale ip -4` (e.g. `100.114.163.7`), and set it in `.env`:
+
+   ```env
+   SERVICE_HOST=100.114.163.7
+   SERVICE_PORT=8002
+   ```
+
+2. Allow the port through Windows Firewall, for tailnet devices only. Run this once in an **Administrator** PowerShell:
+
+   ```powershell
+   New-NetFirewallRule -DisplayName "Smart Library AI (8002, Tailscale)" -Direction Inbound -Protocol TCP -LocalPort 8002 -Action Allow -Profile Private -RemoteAddress 100.64.0.0/10
+   ```
+
+3. Start the service with `.venv/Scripts/python -m app`, then share `http://<your-tailscale-ip>:8002/api/v1`. Teammates can check it at `/api/v1/health` and `/docs`.
 
 ### No API key?
 
@@ -222,7 +241,7 @@ LIBRARY_API_BASE_URL=http://100.83.115.82:8001/api/v1
 2. The backend owner has started the server bound to the Tailscale IP (`--host 100.83.115.82 --port 8001`). If it is bound to `127.0.0.1`, connections time out.
 3. Check reachability: open `http://100.83.115.82:8001/api/v1/health`, or call this service's `GET /api/v1/health` and look for `backend_reachable: true`.
 
-The backend uses port 8001 on **its** Mac. This AI service also listens on 8001, but on **your** machine, so the two don't clash.
+The backend uses port **8001** on its Mac; this AI service uses port **8002** on your machine.
 
 ### What the HTTP adapter does
 
@@ -305,6 +324,8 @@ It reports these metrics over 19 labelled cases in [eval/cases.json](eval/cases.
 | `INDEXER_TOKEN` | – | Optional, HTTP mode: token used to index non-public content |
 | `MAX_TOOL_CALLS` | `6` | Per message |
 | `ACTION_TTL_SECONDS` | `300` | Pending action lifetime |
+| `SERVICE_HOST` | `127.0.0.1` | Address `python -m app` listens on; your Tailscale IP to share with the team |
+| `SERVICE_PORT` | `8002` | AI service port (the backend uses 8001) |
 
 ---
 

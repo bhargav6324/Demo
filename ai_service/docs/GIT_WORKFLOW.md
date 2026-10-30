@@ -13,7 +13,7 @@ This guide covers how the AI service was restored to GitHub, how the `ai` branch
 Demo/
 ├── README.md        ← overview table of all modules
 ├── backend/         ← backend API (port 8000)
-├── ai_service/      ← AI service (port 8001)  ← this module
+├── ai_service/      ← AI service (port 8002)  ← this module
 └── frontend/        ← frontend
 ```
 
@@ -212,7 +212,7 @@ py -3.13 -m venv .venv
 .\.venv\Scripts\python -m pip install -r requirements.txt
 copy .env.example .env     # then put your GEMINI_API_KEY in .env (never commit .env)
 .\.venv\Scripts\python -m pytest -q
-.\.venv\Scripts\python -m uvicorn app.main:app --port 8001
+.\.venv\Scripts\python -m app      # uses SERVICE_HOST / SERVICE_PORT from .env (default 127.0.0.1:8002)
 ```
 
 See [../README.md](../README.md) for the API and configuration.

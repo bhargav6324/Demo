@@ -41,7 +41,10 @@ class Settings(BaseSettings):
     action_ttl_seconds: int = 300
 
     # Service
-    service_port: int = 8001
+    # Where this AI service listens. 8002 avoids confusion with the backend's 8001.
+    # Use this PC's Tailscale IP (or 0.0.0.0) so teammates on the tailnet can reach it.
+    service_host: str = "127.0.0.1"
+    service_port: int = 8002
     log_level: str = "INFO"
     fixtures_dir: Path = BASE_DIR / "fixtures"
 
