@@ -93,7 +93,8 @@ def test_reservation_request_then_confirm(make_app):
     body = confirm(client, action_id).json()
     assert body["status"] == "success" and body["trace_id"]
     d = body["data"]
-    assert d["transaction_status"] == "succeeded" and d["action_type"] == "reservation"
+    assert d["transaction_status"] == "completed" and d["action_type"] == "reservation"
+    assert d["transaction_id"] == d["reservation_id"]
     assert d["reservation_id"].startswith("rsv-")
     assert "Machine Learning for Absolute Beginners" in d["message"]
     assert services.adapter.availability["res-006"].available_copies == 1
@@ -107,14 +108,14 @@ def test_reservation_request_then_confirm(make_app):
 def test_waitlist_reservation_message(make_app):
     client, _ = make_app(ScriptedLLM([]))
     d = confirm(client, propose(client, "create_reservation", resource_id="res-023")).json()["data"]
-    assert d["transaction_status"] == "succeeded" and "waitlist" in d["message"] and "position 3" in d["message"]
+    assert d["transaction_status"] == "completed" and "waitlist" in d["message"] and "position 3" in d["message"]
 
 
 def test_renewal_request_then_confirm(make_app):
     client, services = make_app(ScriptedLLM([]))
     old_due = services.adapter.loans["loan-5001"]["loan"].due_at
     d = confirm(client, propose(client, "renew_loan", loan_id="loan-5001")).json()["data"]
-    assert d["transaction_status"] == "succeeded" and d["loan_id"] == "loan-5001"
+    assert d["transaction_status"] == "completed" and d["loan_id"] == "loan-5001"
     assert (services.adapter.loans["loan-5001"]["loan"].due_at - old_due).days == 14
     assert "New due date" in d["message"]
 
@@ -147,7 +148,7 @@ def test_business_failure_at_confirm_time(make_app):
     action_id = propose(client, "renew_loan", loan_id="loan-5003")
     services.adapter.availability["res-001"].waitlist_count = 1  # someone joined the waitlist meanwhile
     d = confirm(client, action_id).json()["data"]
-    assert d["transaction_status"] == "failed" and d["details"]["error_code"] == "not_renewable"
+    assert d["transaction_status"] == "rejected" and d["details"]["error_code"] == "not_renewable"
     assert confirm(client, action_id).status_code == 404  # failed action is discarded
 
 
@@ -159,5 +160,5 @@ def test_outage_at_confirm_time_is_retryable(make_app):
     assert d["transaction_status"] == "failed" and "Nothing was changed" in d["message"]
     services.adapter.failures.clear()
     d = confirm(client, action_id).json()["data"]
-    assert d["transaction_status"] == "succeeded"
+    assert d["transaction_status"] == "completed"
     assert services.adapter.availability["res-006"].available_copies == 1

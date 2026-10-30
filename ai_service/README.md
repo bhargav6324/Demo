@@ -172,15 +172,21 @@ Request:
 Response `data`:
 
 ```json
-{ "action_id": "act-…", "action_type": "reservation", "transaction_status": "succeeded",
-  "reservation_id": "rsv-8001", "loan_id": null,
+{ "action_id": "act-…", "action_type": "reservation", "transaction_status": "completed",
+  "transaction_id": "rsv-8001", "reservation_id": "rsv-8001", "loan_id": null,
   "message": "Reservation confirmed: 'Prompt Engineering for Generative AI' is being held for you to pick up.",
   "details": { … } }
 ```
 
 The request requires the same user who received the proposal. Actions expire after `ACTION_TTL_SECONDS` (default 300).
 
-Confirming twice returns the same result; nothing is executed twice. On a backend outage, the response is `transaction_status: "failed"` and the action is kept, so retrying is safe because it uses the same idempotency key.
+**`transaction_status`** is one of:
+
+| Value | Meaning | Action afterwards |
+|---|---|---|
+| `completed` | The backend applied it. `transaction_id` is the reservation or loan ID. | Confirming again returns the same result; nothing runs twice. |
+| `rejected` | A library rule refused it (e.g. not renewable, duplicate hold). `details.error_code` gives the reason. | Discarded. |
+| `failed` | Temporary outage; nothing changed. | Kept, so retrying is safe: it reuses the same idempotency key. |
 
 **Errors:**
 - `401`: no token
@@ -190,7 +196,7 @@ Confirming twice returns the same result; nothing is executed twice. On a backen
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /api/v1/health` | Adapter mode, backend reachability, LLM readiness, embedder and indexed chunk count. |
+| `GET /api/v1/health` | `status` (`ok`, or `degraded` when the backend or LLM is unavailable), plus adapter mode, backend reachability, LLM readiness, embedder and indexed chunk count. |
 | `POST /api/v1/index/refresh?full=false` | Librarian-only. Pulls new or updated resources into the vector index. This also runs automatically every `RAG_REFRESH_SECONDS`. |
 
 ### Service-level errors

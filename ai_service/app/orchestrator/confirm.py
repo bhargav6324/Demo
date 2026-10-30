@@ -45,23 +45,26 @@ async def confirm_action(action_id: str, user: UserContext, actions: ActionStore
                    if d["status"] == "active"
                    else f"You're on the waitlist for '{action.title}' at position {d['queue_position']}. "
                         "Positions can change when higher-priority patrons (faculty, then researchers) join.")
-            data = ConfirmActionData(**base, transaction_status="succeeded", reservation_id=d["reservation_id"],
-                                     message=msg, details=d)
+            data = ConfirmActionData(**base, transaction_status="completed", transaction_id=d["reservation_id"],
+                                     reservation_id=d["reservation_id"], message=msg, details=d)
         else:
             due = datetime.fromisoformat(d["due_at"]).date()
-            data = ConfirmActionData(**base, transaction_status="succeeded", loan_id=d["loan_id"],
-                                     message=f"Renewed '{action.title}'. New due date: {due}.", details=d)
+            data = ConfirmActionData(**base, transaction_status="completed", transaction_id=d["loan_id"],
+                                     loan_id=d["loan_id"], message=f"Renewed '{action.title}'. New due date: {due}.",
+                                     details=d)
         action.result = data.model_dump(mode="json")
         return data
 
     code = result.error_code
     if code in ToolError.RETRYABLE:
         # Keep the action (same idempotency key) so the user can safely retry
+        status = "failed"
         msg = "The library system is temporarily unavailable. Nothing was changed; please try confirming again."
     else:
+        status = "rejected"
         actions.remove(action.action_id)
         reason = _FAILURE_TEXT.get(code, result.error["message"] if result.error else "an unexpected error")
         msg = f"Could not complete the {action.action_type} for '{action.title}': {reason}."
-    return ConfirmActionData(**base, transaction_status="failed",
+    return ConfirmActionData(**base, transaction_status=status,
                              loan_id=action.args.get("loan_id"), message=msg,
                              details={"error_code": code})

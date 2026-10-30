@@ -271,7 +271,7 @@ def test_http_mode_reserve_and_confirm(http_app, backend):
 
     c = client.post("/api/v1/chat/actions/confirm", json={"action_id": d["proposed_action"]["action_id"]},
                     headers=AUTH["student"]).json()["data"]
-    assert c["transaction_status"] == "succeeded"
+    assert c["transaction_status"] == "completed"
     posts = [r for r in backend.requests if r.method == "POST"]
     assert len(posts) == 1 and posts[0].headers["Idempotency-Key"]
     assert posts[0].headers["Authorization"] == "Bearer mock-token-student"  # acting as the user

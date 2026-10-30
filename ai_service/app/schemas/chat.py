@@ -48,9 +48,12 @@ class ConfirmActionRequest(BaseModel):
 
 
 class ConfirmActionData(BaseModel):
+    """completed = the backend applied it; rejected = a library rule refused it (action
+    discarded); failed = temporary outage, nothing changed (action kept, safe to retry)."""
     action_id: str
     action_type: Literal["reservation", "renewal"]
-    transaction_status: Literal["succeeded", "failed"]
+    transaction_status: Literal["completed", "rejected", "failed"]
+    transaction_id: str | None = None  # reservation_id or loan_id of the affected record
     reservation_id: str | None = None
     loan_id: str | None = None
     message: str

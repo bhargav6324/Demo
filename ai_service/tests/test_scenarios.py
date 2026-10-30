@@ -115,7 +115,7 @@ def test_05_reservation_then_confirm(client, audit):
     resp = client.post("/api/v1/chat/actions/confirm", json={"action_id": d["proposed_action"]["action_id"]},
                        headers=AUTH["student"]).json()
     c = ConfirmActionData.model_validate(resp["data"])
-    assert c.transaction_status == "succeeded" and c.reservation_id
+    assert c.transaction_status == "completed" and c.reservation_id
     assert audit(resp["trace_id"]) == [("create_reservation", "success")]
 
 
@@ -128,7 +128,7 @@ def test_06_renewal_then_confirm(client):
     assert d["outcome"] == "needs_confirmation" and d["proposed_action"]["loan_id"] == "loan-5001"
     c = client.post("/api/v1/chat/actions/confirm", json={"action_id": d["proposed_action"]["action_id"]},
                     headers=AUTH["student"]).json()["data"]
-    assert c["transaction_status"] == "succeeded" and c["loan_id"] == "loan-5001"
+    assert c["transaction_status"] == "completed" and c["loan_id"] == "loan-5001"
 
 
 # 7 ------------------------------------------------------------------------------------------
