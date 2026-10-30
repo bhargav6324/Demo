@@ -12,8 +12,8 @@ _NOT_A_PERSON = r"(my|your|our|the|this|that|library|book|item|title|resource|pa
 _OTHER_USER_PATTERNS = [
     # "Meera's loans", "my friend's borrowing history" (but not "my loans" or "this book's due date")
     re.compile(rf"\b(?!{_NOT_A_PERSON}'s)[a-z]+'s\s+(\w+\s+)?{_ACCOUNT}\b", re.I),
-    # "loans of user u-1002", "u-1002 borrowed", "student id 1002"
-    re.compile(r"\bu-\d{3,}\b", re.I),
+    # "loans of user u-1002", "user-002's reservations" (mock and backend user ID formats)
+    re.compile(r"\b(u|user)-\d{3,}\b", re.I),
     re.compile(rf"\b(another|other|different)\s+(user|student|person|member|patron|people)('s)?\b.*\b{_ACCOUNT}\b", re.I),
     re.compile(rf"\b{_ACCOUNT}\b.*\b(of|for|by)\s+(another|other|a different)\s+(user|student|person|member|patron)\b", re.I),
     re.compile(rf"\b(someone else|everyone|all users|all students)('s)?\b.*\b{_ACCOUNT}\b", re.I),

@@ -88,7 +88,17 @@ async def test_student_denied_analytics(executor, adapter, student):
 
 async def test_librarian_gets_analytics(executor, adapter, librarian):
     res = await executor.execute("get_library_analytics", {}, ctx(adapter, librarian), Trace())
-    assert res.ok and res.data["top_waitlisted"][0]["resource_id"] == "res-004"
+    assert res.ok and res.data["total_resources"] == 26 and res.data["popular_resources"]
+    # waitlist ranking computed from live availability (summary has no waitlist data)
+    waits = res.data["longest_waitlists"]
+    assert [w["resource_id"] for w in waits[:2]] == ["res-004", "res-005"]
+    assert [w["waitlist_count"] for w in waits] == sorted((w["waitlist_count"] for w in waits), reverse=True)
+
+
+async def test_librarian_cannot_reserve_or_renew(executor, adapter, librarian):
+    for tool, args in (("create_reservation", {"resource_id": "res-006"}), ("renew_loan", {"loan_id": "loan-5001"})):
+        res = await executor.execute(tool, args, ctx(adapter, librarian), Trace())
+        assert res.status == "rejected" and res.error_code == "permission_denied"
 
 
 # ---------- execution ----------
@@ -157,7 +167,7 @@ async def test_reservation_precheck_unknown_resource(executor, adapter, student)
 async def test_confirmed_reservation_executes(executor, adapter, student):
     res = await executor.execute("create_reservation", {"resource_id": "res-006"},
                                  ctx(adapter, student, key="idem-1"), Trace(), confirmed=True)
-    assert res.ok and res.data["status"] == "ready_for_pickup"
+    assert res.ok and res.data["status"] == "active"
 
 
 async def test_confirmed_action_requires_idempotency_key(executor, adapter, student):
@@ -173,6 +183,12 @@ async def test_renewal_precheck(executor, adapter, student, student2):
     assert overdue.error_code == "not_renewable"
     other = await executor.execute("renew_loan", {"loan_id": "loan-5001"}, ctx(adapter, student2), Trace())
     assert other.error_code == "not_found"
+
+
+async def test_renewal_preview_uses_role_period(executor, adapter, student, faculty):
+    s = await executor.execute("renew_loan", {"loan_id": "loan-5001"}, ctx(adapter, student), Trace())
+    f = await executor.execute("renew_loan", {"loan_id": "loan-5005"}, ctx(adapter, faculty), Trace())
+    assert s.data["renewal_days"] == 14 and f.data["renewal_days"] == 28
 
 
 # ---------- tracing ----------

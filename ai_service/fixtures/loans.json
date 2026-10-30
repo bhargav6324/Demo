@@ -1,11 +1,11 @@
 {
   "_comment": "Dates are offsets in days from 'now' so fixtures never go stale; the mock adapter converts them at load time.",
   "loans": [
-    {"loan_id": "loan-5001", "user_id": "u-1001", "resource_id": "res-007", "borrowed_days_ago": 10, "due_in_days": 4, "renewable": true, "fine_amount": 0.0},
-    {"loan_id": "loan-5002", "user_id": "u-1001", "resource_id": "res-005", "borrowed_days_ago": 20, "due_in_days": -2, "renewable": false, "fine_amount": 1.0},
-    {"loan_id": "loan-5003", "user_id": "u-1001", "resource_id": "res-001", "borrowed_days_ago": 3, "due_in_days": 11, "renewable": true, "fine_amount": 0.0},
-    {"loan_id": "loan-5004", "user_id": "u-1002", "resource_id": "res-011", "borrowed_days_ago": 8, "due_in_days": 6, "renewable": true, "fine_amount": 0.0},
-    {"loan_id": "loan-5005", "user_id": "u-2001", "resource_id": "res-010", "borrowed_days_ago": 5, "due_in_days": 23, "renewable": true, "fine_amount": 0.0}
+    {"loan_id": "loan-5001", "user_id": "u-1001", "resource_id": "res-007", "borrowed_days_ago": 10, "due_in_days": 4, "renewable": true, "fine_amount": "0.00"},
+    {"loan_id": "loan-5002", "user_id": "u-1001", "resource_id": "res-005", "borrowed_days_ago": 20, "due_in_days": -2, "renewable": false, "fine_amount": "1.00"},
+    {"loan_id": "loan-5003", "user_id": "u-1001", "resource_id": "res-001", "borrowed_days_ago": 3, "due_in_days": 11, "renewable": true, "fine_amount": "0.00"},
+    {"loan_id": "loan-5004", "user_id": "u-1002", "resource_id": "res-011", "borrowed_days_ago": 8, "due_in_days": 6, "renewable": true, "fine_amount": "0.00"},
+    {"loan_id": "loan-5005", "user_id": "u-2001", "resource_id": "res-010", "borrowed_days_ago": 5, "due_in_days": 23, "renewable": true, "fine_amount": "0.00"}
   ],
   "reservations": [
     {"reservation_id": "rsv-7001", "user_id": "u-1002", "resource_id": "res-004", "status": "waitlisted", "queue_position": 2},

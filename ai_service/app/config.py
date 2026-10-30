@@ -13,8 +13,11 @@ class Settings(BaseSettings):
 
     # Backend tool adapter
     tool_adapter: Literal["mock", "http"] = "mock"
-    backend_base_url: str = "http://localhost:8000"
-    backend_timeout_seconds: float = 5.0
+    # Full API base from the backend handoff (already includes /api/v1); takes precedence
+    library_api_base_url: str | None = None
+    # Backend origin; "/api/v1" is appended when LIBRARY_API_BASE_URL is not set
+    backend_base_url: str = "http://100.83.115.82:8001"
+    backend_timeout_seconds: float = 10.0
     # Mock-only outage simulation, e.g. "get_availability:timeout,search_resources:error" or "*:error"
     mock_failures: str = ""
 
@@ -28,7 +31,9 @@ class Settings(BaseSettings):
     rag_top_k: int = 5
     rag_min_score: float = 0.3          # cosine threshold below which hits are ignored
     rag_refresh_seconds: int = 300      # background updated_since refresh; 0 disables
-    # Service token the indexer uses to read content from the backend (http mode)
+    # Optional bearer token the indexer uses to read non-public content (http mode).
+    # The backend has no service identity, so by default only public content is indexed
+    # (metadata is always indexed); other content is fetched live with the caller's token.
     indexer_token: SecretStr | None = None
 
     # Orchestrator
@@ -47,6 +52,8 @@ class Settings(BaseSettings):
 
     @property
     def backend_api_url(self) -> str:
+        if self.library_api_base_url:
+            return self.library_api_base_url.rstrip("/")
         return self.backend_base_url.rstrip("/") + "/api/v1"
 
 

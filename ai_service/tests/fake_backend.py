@@ -17,8 +17,13 @@ from app.schemas.library import User
 from tests.conftest import FIXTURES
 
 INDEXER_TOKEN = "backend-indexer-token"
-_HTTP_STATUS = {"not_found": 404, "permission_denied": 403, "unauthorized": 401, "conflict": 409,
-                "not_renewable": 409, "invalid_argument": 422, "backend_timeout": 504, "backend_error": 500}
+# Canonical ToolError code -> (backend error code, HTTP status), per the backend handoff
+_BACKEND_ERRORS = {
+    "not_found": ("not_found", 404), "permission_denied": ("forbidden", 403),
+    "unauthorized": ("unauthorized", 401), "conflict": ("duplicate_reservation", 409),
+    "not_renewable": ("renewal_not_allowed", 409), "invalid_argument": ("validation_error", 422),
+    "backend_timeout": ("internal_error", 500), "backend_error": ("internal_error", 500),
+}
 
 
 class FakeBackend:
@@ -26,7 +31,9 @@ class FakeBackend:
         self.lib = MockLibraryToolAdapter(FIXTURES)
         self.identity = MockIdentityAdapter(FIXTURES)
         self.requests: list[httpx.Request] = []
-        self.fail: dict[str, str] = {}  # path regex -> "timeout" | "500" | "html" | "malformed" | "down"
+        # path regex -> "timeout" | "500" | "html" | "malformed" | "down" | "busy"
+        self.fail: dict[str, str] = {}
+        self.busy_responses = 0  # how many 409 database_busy replies "busy" mode sends before succeeding
 
     @property
     def transport(self) -> httpx.MockTransport:
@@ -41,8 +48,9 @@ class FakeBackend:
 
     @staticmethod
     def err(code, message, status=None):
+        code, default_status = _BACKEND_ERRORS.get(code, (code, 400))
         body = {"status": "error", "error": {"code": code, "message": message}, "trace_id": uuid.uuid4().hex}
-        return httpx.Response(status or _HTTP_STATUS.get(code, 400), json=body)
+        return httpx.Response(status or default_status, json=body)
 
     async def _user(self, request) -> UserContext | None:
         auth = request.headers.get("Authorization", "")
@@ -70,6 +78,9 @@ class FakeBackend:
                     return httpx.Response(502, text="<html>Bad Gateway</html>")
                 if mode == "malformed":
                     return self.ok({"unexpected": True})
+                if mode == "busy" and self.busy_responses > 0:
+                    self.busy_responses -= 1
+                    return self.err("database_busy", "Database is busy, retry with the same key", 409)
         try:
             return await self._route(request, path)
         except ToolError as e:
@@ -84,11 +95,16 @@ class FakeBackend:
         if m == "GET" and path == "/auth/me":
             if user is None:
                 return self.err("unauthorized", "Missing token")
-            return self.ok(self.lib.users[user.user_id].model_dump(mode="json"))
+            u = self.lib.users[user.user_id]
+            return self.ok({"user_id": u.user_id, "name": u.name, "email": u.email, "role": u.role})
+        if path == "/me/profile":  # contract: courses[] and interests[] only
+            p = await self.lib.get_profile(user)
+            return self.ok({"courses": p.courses, "interests": p.interests})
         if m == "GET" and path == "/resources":
             since = q.get("updated_since")
             res = await self.lib.search_resources(
-                user, q.get("query", ""), limit=int(q.get("limit", 10)), type=q.get("type"), level=q.get("level"),
+                user, q.get("query", ""), limit=int(q.get("limit", 20)), offset=int(q.get("offset", 0)),
+                type=q.get("type"), level=q.get("level"),
                 updated_since=datetime.fromisoformat(since) if since else None)
             return self.ok(res.model_dump(mode="json"))
         if mt := re.fullmatch(r"/resources/([^/]+)", path):
@@ -97,8 +113,6 @@ class FakeBackend:
             return self.ok((await self.lib.get_availability(user, mt[1])).model_dump(mode="json"))
         if mt := re.fullmatch(r"/resources/([^/]+)/content", path):
             return self.ok((await self.lib.get_resource_content(user, mt[1])).model_dump(mode="json"))
-        if path == "/me/profile":
-            return self.ok((await self.lib.get_profile(user)).model_dump(mode="json"))
         if path == "/me/loans":
             return self.ok({"items": [l.model_dump(mode="json") for l in await self.lib.get_my_loans(user)]})
         if path == "/me/reservations":

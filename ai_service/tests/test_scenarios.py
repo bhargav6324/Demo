@@ -214,11 +214,34 @@ def test_11_student_requests_librarian_analytics_denied(client, audit):
     assert audit(body["trace_id"]) == [("get_library_analytics", "rejected")]
 
 
+def test_11c_librarian_cannot_reserve(client, audit):
+    body = ask(client, "Reserve res-006 for me", AUTH["librarian"], steps=[
+        call("create_reservation", resource_id="res-006"), final("Done!", "reservation"),
+    ])
+    d = body["data"]
+    assert d["outcome"] == "refused" and d["proposed_action"] is None
+    assert "librarian accounts" in d["assistant_message"]
+    assert audit(body["trace_id"]) == [("create_reservation", "rejected")]
+
+
+def test_11d_librarian_longest_waitlists(make_app):
+    from app.llm.fake_llm import RuleBasedLLM
+
+    client, _ = make_app(RuleBasedLLM())
+    d = client.post("/api/v1/chat/messages", json={"message": "Which titles have the longest waitlists?"},
+                    headers=AUTH["librarian"]).json()["data"]
+    assert d["outcome"] == "answered"
+    assert [r["resource_id"] for r in d["resources"]][:2] == ["res-004", "res-005"]
+    assert "waiting" in d["assistant_message"]
+
+
 def test_11b_librarian_analytics_view(client):
-    d = ask(client, "Which titles have the longest waitlists?", AUTH["librarian"], steps=[
-        call("get_library_analytics"), final("Longest waitlists:", "analytics", [{"resource_id": "res-004"}]),
+    d = ask(client, "Which titles are borrowed the most?", AUTH["librarian"], steps=[
+        call("get_library_analytics"),
+        final("Most borrowed titles:", "analytics", [{"resource_id": "res-001"}, {"resource_id": "res-777"}]),
     ])["data"]
-    assert d["outcome"] == "answered" and d["resources"][0]["resource_id"] == "res-004"
+    assert d["outcome"] == "answered"
+    assert [r["resource_id"] for r in d["resources"]] == ["res-001"]  # from popular_resources; invented id dropped
 
 
 # 12 -----------------------------------------------------------------------------------------

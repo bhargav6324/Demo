@@ -46,7 +46,7 @@ class ScriptedLLM(LLMClient):
 _RES_ID = re.compile(r"\bres-\d+\b")
 _LOAN_ID = re.compile(r"\bloan-\d+\b")
 _OTHER_USER = re.compile(
-    r"\b(u-\d+|another (user|student|person)|other (user|student|people)|someone else|"
+    r"\b((u|user)-\d+|another (user|student|person)|other (user|student|people)|someone else|"
     r"[A-Z][a-z]+'s (loans?|borrow\w*|history|account|reservations?))", re.I)
 _FILLER = re.compile(
     r"\b(is|are|the|a|an|book|books|available|availability|find|search|for|me|please|show|"
@@ -73,10 +73,11 @@ class RuleBasedLLM(LLMClient):
             return final("I can't share another person's borrowing information. I can only show your own account.",
                          "account", abstain="privacy")
 
-        if re.search(r"analytic|waitlist|demand|circulation|utili[sz]ation|catalog gap|overdue trend", low):
+        if re.search(r"analytic|waitlist|demand|circulation|utili[sz]ation|catalog gap|overdue trend|"
+                     r"most borrowed|borrowed the most|popular", low):
             if "get_library_analytics" not in results:
                 return call("get_library_analytics")
-            return self._summarize(results, "analytics")
+            return self._summarize(results, "analytics", intent_hint="waitlist" if "waitlist" in low else None)
 
         if "renew" in low:
             if m := _LOAN_ID.search(text):
@@ -131,7 +132,7 @@ class RuleBasedLLM(LLMClient):
         return self._summarize(results, "search")
 
     @staticmethod
-    def _summarize(results: dict, intent: str, only_top: bool = False) -> ToolCall:
+    def _summarize(results: dict, intent: str, only_top: bool = False, intent_hint: str | None = None) -> ToolCall:
         """Compose an answer purely from tool output."""
         for name, r in results.items():
             if r.get("status") == "confirmation_required":
@@ -151,7 +152,16 @@ class RuleBasedLLM(LLMClient):
                           if "loan_id" in i else f"- {i['resource_id']}: {i['status']}" for i in items]
                 continue
             if name == "get_library_analytics":
-                lines += [f"- {w['title']}: {w['waitlist_count']} waiting" for w in data.get("top_waitlisted", [])]
+                if intent_hint == "waitlist":
+                    lines += [f"- {w['title']}: {w['waitlist_count']} waiting" for w in data.get("longest_waitlists", [])]
+                    lines = lines or ["- No titles currently have a waitlist."]
+                else:
+                    lines += [f"- {p['title']}: borrowed {p['loan_count']} times"
+                              for p in data.get("popular_resources", [])]
+                    lines.append(f"Active loans: {data.get('active_loans')}, overdue: {data.get('overdue_loans')}, "
+                                 f"open holds: {data.get('active_reservations')}.")
+                for row in data.get("longest_waitlists" if intent_hint == "waitlist" else "popular_resources", []):
+                    resources.append({"resource_id": row["resource_id"], "reason": "From library analytics."})
                 continue
             if name == "get_availability":
                 lines.append(f"Available copies: {data['available_copies']} of {data['total_copies']} "
