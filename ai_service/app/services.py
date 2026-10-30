@@ -51,7 +51,8 @@ def build_llm(settings: Settings) -> LLMClient:
         return RuleBasedLLM()
     from app.llm.gemini_client import GeminiClient
     key = settings.gemini_api_key.get_secret_value() if settings.gemini_api_key else ""
-    return GeminiClient(api_key=key, model=settings.llm_model)
+    fallbacks = [m.strip() for m in settings.llm_fallback_models.split(",") if m.strip()]
+    return GeminiClient(api_key=key, model=settings.llm_model, fallback_models=fallbacks)
 
 
 def build_retriever(settings: Settings, adapter: LibraryToolAdapter) -> Retriever:

@@ -83,6 +83,25 @@ The default `127.0.0.1` is reachable only from your own PC. To let the frontend 
 
 3. Start the service with `.venv/Scripts/python -m app`, then share `http://<your-tailscale-ip>:8002/api/v1`. Teammates can check it at `/api/v1/health` and `/docs`.
 
+### Always-on deployment (Windows)
+
+Use these scripts in `scripts/` to keep the service running without an open terminal. Run them from `ai_service` with `powershell -ExecutionPolicy Bypass -File scripts\<name>.ps1`.
+
+| Script | What it does |
+|---|---|
+| `install_autostart.ps1` | Registers a Scheduled Task, "SmartLibrary AI Service". It starts the service hidden in the background now and at every Windows log-in. No admin rights needed. |
+| `start_ai_service.ps1` | Runs the service and restarts it 10 s after any stop: a crash, or Tailscale not up yet after boot. Logs go to `logs\ai_service_<date>.log`. |
+| `status_ai_service.ps1` | Shows the task state, the listening address, health (`ok` / `degraded`) and the latest log file. |
+| `stop_ai_service.ps1` | Stops the restart loop and the server. The task stays installed for the next log-in. |
+| `uninstall_autostart.ps1` | Stops the service and removes the autostart task. |
+
+**Before installing:**
+- `.venv` exists inside `ai_service` (Quick start).
+- `.env` has `TOOL_ADAPTER=http`, `LIBRARY_API_BASE_URL`, `GEMINI_API_KEY`, `SERVICE_HOST` (your Tailscale IP) and `SERVICE_PORT=8002`.
+- The firewall rule above is in place.
+
+The task runs only while you're logged in to Windows. Keep the PC awake (no sleep) during demos.
+
 ### No API key?
 
 Set `LLM_PROVIDER=fake` to use a deterministic, offline, rule-based model. It is good for demos and for the frontend team.
@@ -323,6 +342,7 @@ It reports these metrics over 19 labelled cases in [eval/cases.json](eval/cases.
 | `MOCK_FAILURES` | – | Simulate outages in mock mode, e.g. `get_availability:timeout` or `*:error` |
 | `LLM_PROVIDER` | `gemini` | `gemini` or `fake` |
 | `LLM_MODEL` | `gemini-2.5-flash` | |
+| `LLM_FALLBACK_MODELS` | – | Comma-separated models tried in order when a model's quota is used up. A used-up model is skipped until Gemini says it's available again. |
 | `GEMINI_API_KEY` | – | |
 | `EMBEDDING_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` | or `hashing` |
 | `RAG_MIN_SCORE` | `0.3` | Tuned on this catalog: relevant hits scored 0.44 or higher, unrelated queries 0.18 or lower |

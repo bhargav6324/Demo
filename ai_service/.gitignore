@@ -5,3 +5,4 @@ __pycache__/
 *.faiss
 index_store/
 eval/report.json
+logs/

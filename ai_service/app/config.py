@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     # LLM
     llm_provider: Literal["gemini", "fake"] = "gemini"
     llm_model: str = "gemini-2.5-flash"
+    # Comma-separated models tried in order when the primary model's quota is used up
+    llm_fallback_models: str = ""
     gemini_api_key: SecretStr | None = None
 
     # Embeddings / RAG

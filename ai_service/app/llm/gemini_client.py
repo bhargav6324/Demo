@@ -9,6 +9,7 @@ first event loop it sees, which breaks across loops (tests, eval runner)."""
 import asyncio
 import logging
 import re
+import time
 import uuid
 
 from google import genai
@@ -28,11 +29,14 @@ def _retry_delay(err: Exception) -> float | None:
 
 class GeminiClient(LLMClient):
     def __init__(self, api_key: str, model: str, temperature: float = 0.1,
-                 max_retries: int = 2, max_retry_wait: float = 30.0):
+                 max_retries: int = 2, max_retry_wait: float = 30.0, fallback_models: list[str] | None = None):
         if not api_key:
             raise ValueError("GEMINI_API_KEY is not set")
         self._client = genai.Client(api_key=api_key)
         self._model = model
+        # Primary model first, then fallbacks (each free-tier model has its own daily quota)
+        self._models = list(dict.fromkeys([model, *(fallback_models or [])]))
+        self._exhausted_until: dict[str, float] = {}
         self._temperature = temperature
         self._max_retries = max_retries
         self._max_retry_wait = max_retry_wait
@@ -101,21 +105,43 @@ class GeminiClient(LLMClient):
         return LLMResponse(text="".join(texts) or None, tool_calls=calls, raw=content)
 
     async def _call_with_retry(self, contents, config):
+        """Try the primary model, then each fallback. A model whose quota is used up
+        (429 with a long retry delay, e.g. the free tier's daily limit) is skipped
+        until Gemini says it is available again."""
+        last_error: LLMError | None = None
+        for model in self._available_models():
+            try:
+                return await self._call_model(model, contents, config)
+            except LLMError as e:
+                last_error = e
+                if e.code != "llm_rate_limited":
+                    raise
+                logger.warning("Gemini model %s is out of quota; trying the next fallback model", model)
+        raise last_error or LLMError("All Gemini models are out of quota", code="llm_rate_limited")
+
+    def _available_models(self) -> list[str]:
+        now = time.monotonic()
+        return [m for m in self._models if self._exhausted_until.get(m, 0) <= now]
+
+    async def _call_model(self, model: str, contents, config):
         for attempt in range(self._max_retries + 1):
             try:
                 return await asyncio.to_thread(
-                    self._client.models.generate_content, model=self._model, contents=contents, config=config
+                    self._client.models.generate_content, model=model, contents=contents, config=config
                 )
             except genai_errors.APIError as e:
                 status = getattr(e, "code", None)
                 retryable = status in (429, 500, 503)
                 wait = _retry_delay(e) or 2.0 * (attempt + 1)
                 if retryable and attempt < self._max_retries and wait <= self._max_retry_wait:
-                    logger.warning("Gemini %s, retrying in %.1fs (attempt %d)", status, wait, attempt + 1)
+                    logger.warning("Gemini %s on %s, retrying in %.1fs (attempt %d)", status, model, wait, attempt + 1)
                     await asyncio.sleep(wait)
                     continue
+                if status == 429:
+                    # Remember the quota is gone so later requests go straight to a fallback
+                    self._exhausted_until[model] = time.monotonic() + (_retry_delay(e) or 60.0)
                 code = "llm_rate_limited" if status == 429 else "llm_unavailable"
                 # Status code only: provider messages can be long and are not for end users
-                raise LLMError(f"Gemini API error {status}", code=code) from e
+                raise LLMError(f"Gemini API error {status} ({model})", code=code) from e
             except Exception as e:  # noqa: BLE001 - network etc.
                 raise LLMError(f"Gemini request failed: {type(e).__name__}") from e
