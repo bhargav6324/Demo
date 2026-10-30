@@ -1,0 +1,10 @@
+[
+  {"token": "mock-token-student", "user": {"user_id": "u-1001", "name": "Aarav Sharma", "email": "aarav.sharma@university.edu", "role": "student",
+    "courses": ["CS201 Data Science Fundamentals", "CS105 Python Programming"], "interests": ["data science", "machine learning"]}},
+  {"token": "mock-token-student2", "user": {"user_id": "u-1002", "name": "Meera Iyer", "email": "meera.iyer@university.edu", "role": "student",
+    "courses": ["CS340 Natural Language Processing"], "interests": ["generative ai", "nlp"]}},
+  {"token": "mock-token-faculty", "user": {"user_id": "u-2001", "name": "Dr. Rohan Verma", "email": "rohan.verma@university.edu", "role": "faculty",
+    "courses": ["CS540 Information Retrieval"], "interests": ["retrieval-augmented generation", "information retrieval"]}},
+  {"token": "mock-token-librarian", "user": {"user_id": "u-3001", "name": "Kavya Nair", "email": "kavya.nair@university.edu", "role": "librarian",
+    "courses": [], "interests": ["collection development", "digital libraries"]}}
+]
