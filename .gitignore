@@ -1,14 +1,6 @@
-.venv/
-__pycache__/
-*.py[cod]
-.pytest_cache/
-*.egg-info/
-.env
-.env.*
-!.env.example
-*.db
-*.db-shm
-*.db-wal
-build/
-dist/
-.DS_Store
+# Local tools at the repository root; module-specific rules live in backend/.gitignore.
+/.venv/
+/.pytest_cache/
+/__pycache__/
+/*.egg-info/
+/.DS_Store
