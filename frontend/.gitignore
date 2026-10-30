@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.env
+.env.local
+*.local
+# Public, browser-visible service URLs only (no secrets) — needed by `npm run dev:real`.
+!.env.real
