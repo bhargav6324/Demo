@@ -77,12 +77,12 @@ def split_text(text: str, size: int = CHUNK_CHARS, overlap: int = CHUNK_OVERLAP)
 
 def content_chunks(r: Resource, content: ResourceContent) -> list[Chunk]:
     chunks = []
-    for i, (section, text) in enumerate(split_text(content.text)):
+    for i, (section, text) in enumerate(split_text(content.content)):
         chunks.append(Chunk(
             chunk_id=f"{r.resource_id}#c{i}", resource_id=r.resource_id, title=r.title,
-            source_type="document", access_level=content.access_level,
+            source_type="document", access_level=r.access_level,
             # Title and section prepended so the passage embeds with its context
             text=f"{r.title} | {section}: {text}" if section else f"{r.title}: {text}",
-            metadata={**_base_metadata(r), "section": section},
+            metadata={**_base_metadata(r), "section": section, "source": content.source},
         ))
     return chunks

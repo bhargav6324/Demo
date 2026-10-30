@@ -20,19 +20,34 @@ async def test_identity_context_hides_token(student):
 
 # ---------- catalog ----------
 
-async def test_search_python_returns_ranked_python_titles(adapter):
-    result = await adapter.search_resources(None, "python programming")
+async def test_search_is_literal_substring_ordered_by_updated_at(adapter):
+    """Backend contract: case-insensitive literal substring, ordered by updated_at then resource_id."""
+    result = await adapter.search_resources(None, "PYTHON")
     assert result.total > 0
-    top = result.items[:5]
-    assert all("python" in (r.title + " ".join(r.topics)).lower() for r in top)
-    # titles with "Python" in the name rank above topic-only matches
-    assert "python" in top[0].title.lower()
+    haystacks = [" ".join([r.resource_id, r.title, r.description, *r.authors, *r.topics]).lower()
+                 for r in result.items]
+    assert all("python" in h for h in haystacks)
+    keys = [(r.updated_at, r.resource_id) for r in result.items]
+    assert keys == sorted(keys)
+    # a multi-word phrase only matches where it appears literally
+    assert (await adapter.search_resources(None, "beginner books on machine learning")).total == 0
+
+
+async def test_search_paging_limit_and_offset(adapter):
+    everything = await adapter.search_resources(None, "", limit=100)
+    page1 = await adapter.search_resources(None, "", limit=10, offset=0)
+    page3 = await adapter.search_resources(None, "", limit=10, offset=20)
+    assert page1.total == everything.total == 26          # total counts all matches before paging
+    assert [r.resource_id for r in page1.items] == [r.resource_id for r in everything.items[:10]]
+    assert [r.resource_id for r in page3.items] == [r.resource_id for r in everything.items[20:30]]
+    with pytest.raises(ToolError) as exc:
+        await adapter.search_resources(None, "", limit=500)
+    assert exc.value.code == ToolError.INVALID_ARGUMENT
 
 
 async def test_search_filters_by_type_and_level(adapter):
     result = await adapter.search_resources(None, "machine learning", type="book", level="beginner")
-    ids = [r.resource_id for r in result.items]
-    assert ids[0] == "res-006"  # "Machine Learning" in title ranks first
+    assert "res-006" in [r.resource_id for r in result.items]
     assert all(r.type == "book" and r.level == "beginner" for r in result.items)
 
 
@@ -45,6 +60,9 @@ async def test_search_updated_since(adapter):
     since = datetime(2026, 10, 5, tzinfo=timezone.utc)
     result = await adapter.search_resources(None, "", limit=50, updated_since=since)
     assert {r.resource_id for r in result.items} == {"res-020", "res-025"}
+    # strictly newer-than: the exact timestamp of res-025 excludes it
+    newest = max(r.updated_at for r in result.items)
+    assert (await adapter.search_resources(None, "", updated_since=newest)).total == 0
 
 
 async def test_availability_known_and_unknown(adapter):
@@ -55,18 +73,24 @@ async def test_availability_known_and_unknown(adapter):
     assert exc.value.code == ToolError.NOT_FOUND
 
 
-async def test_restricted_content_requires_role(adapter, student, faculty):
+async def test_restricted_content_is_librarian_only(adapter, student, faculty, librarian):
+    for caller in (student, faculty):
+        with pytest.raises(ToolError) as exc:
+            await adapter.get_resource_content(caller, "res-019")
+        assert exc.value.code == ToolError.PERMISSION_DENIED
+    content = await adapter.get_resource_content(librarian, "res-019")
+    assert content.resource_id == "res-019" and "Hybrid" in content.content and content.source
+
+
+async def test_authenticated_content_requires_login(adapter, student):
     with pytest.raises(ToolError) as exc:
-        await adapter.get_resource_content(student, "res-019")
-    assert exc.value.code == ToolError.PERMISSION_DENIED
-    content = await adapter.get_resource_content(faculty, "res-019")
-    assert "Hybrid" in content.title
-
-
-async def test_university_content_requires_login(adapter, student):
-    with pytest.raises(ToolError):
         await adapter.get_resource_content(None, "res-016")
-    assert (await adapter.get_resource_content(student, "res-016")).text
+    assert exc.value.code == ToolError.UNAUTHORIZED  # 401, not 403, when not logged in
+    assert (await adapter.get_resource_content(student, "res-016")).content
+
+
+async def test_public_content_anonymous(adapter):
+    assert (await adapter.get_resource_content(None, "res-013")).content
 
 
 # ---------- account ----------
@@ -95,8 +119,14 @@ async def test_account_tools_require_auth(adapter):
 async def test_reservation_available_item_holds_copy(adapter, student):
     before = (await adapter.get_availability(None, "res-006")).available_copies
     rsv = await adapter.create_reservation(student, "res-006", "key-1")
-    assert rsv.status == "ready_for_pickup"
+    assert rsv.status == "active" and rsv.queue_position is None
     assert (await adapter.get_availability(None, "res-006")).available_copies == before - 1
+
+
+async def test_existing_waiters_get_priority(adapter, student):
+    # res-010 has 1 free copy but 1 person already waiting -> new request joins the queue
+    rsv = await adapter.create_reservation(student, "res-010", "key-w")
+    assert rsv.status == "waitlisted" and rsv.queue_position == 2
 
 
 async def test_reservation_unavailable_item_joins_waitlist(adapter, student):
@@ -108,37 +138,53 @@ async def test_reservation_is_idempotent(adapter, student):
     first = await adapter.create_reservation(student, "res-006", "same-key")
     second = await adapter.create_reservation(student, "res-006", "same-key")
     assert first.reservation_id == second.reservation_id
-
-
-async def test_reservation_conflicts(adapter, student, student2):
-    with pytest.raises(ToolError) as exc:
-        await adapter.create_reservation(student, "res-007", "k")  # already on loan
+    with pytest.raises(ToolError) as exc:  # same key, different resource -> idempotency conflict
+        await adapter.create_reservation(student, "res-008", "same-key")
     assert exc.value.code == ToolError.CONFLICT
+
+
+async def test_duplicate_hold_conflicts(adapter, student2):
     with pytest.raises(ToolError) as exc:
         await adapter.create_reservation(student2, "res-004", "k2")  # already waitlisted
     assert exc.value.code == ToolError.CONFLICT
 
 
-async def test_renewal_extends_due_date_once(adapter, student):
+async def test_renewal_adds_14_days_at_most_twice(adapter, student):
     before = {l.loan_id: l for l in await adapter.get_my_loans(student)}["loan-5001"]
-    renewed = await adapter.renew_loan(student, "loan-5001", "r-1")
-    assert (renewed.due_at - before.due_at).days == 14
-    assert renewed.renewable is False
+    first = await adapter.renew_loan(student, "loan-5001", "r-1")
+    assert (first.due_at - before.due_at).days == 14 and first.renewable is True
+    second = await adapter.renew_loan(student, "loan-5001", "r-2")
+    assert (second.due_at - before.due_at).days == 28 and second.renewable is False
     with pytest.raises(ToolError) as exc:
-        await adapter.renew_loan(student, "loan-5001", "r-2")
+        await adapter.renew_loan(student, "loan-5001", "r-3")
     assert exc.value.code == ToolError.NOT_RENEWABLE
 
 
-async def test_renewal_rules(adapter, student, student2):
+async def test_renewal_replay_does_not_extend_twice(adapter, student):
+    a = await adapter.renew_loan(student, "loan-5001", "same")
+    b = await adapter.renew_loan(student, "loan-5001", "same")
+    assert a.due_at == b.due_at
+
+
+async def test_renewal_rules(adapter, student, student2, librarian):
     with pytest.raises(ToolError) as exc:
-        await adapter.renew_loan(student, "loan-5002", "x")  # overdue
+        await adapter.renew_loan(student, "loan-5002", "x")  # overdue and fined
     assert exc.value.code == ToolError.NOT_RENEWABLE
     with pytest.raises(ToolError) as exc:
-        await adapter.renew_loan(student2, "loan-5004", "y")  # item has a waitlist
+        await adapter.renew_loan(student2, "loan-5004", "y")  # another patron is waiting
     assert exc.value.code == ToolError.NOT_RENEWABLE
+    for caller in (student2, librarian):  # non-owner, including librarians -> 403
+        with pytest.raises(ToolError) as exc:
+            await adapter.renew_loan(caller, "loan-5001", "z")
+        assert exc.value.code == ToolError.PERMISSION_DENIED
     with pytest.raises(ToolError) as exc:
-        await adapter.renew_loan(student2, "loan-5001", "z")  # someone else's loan
+        await adapter.renew_loan(student, "loan-9999", "w")
     assert exc.value.code == ToolError.NOT_FOUND
+
+
+async def test_fine_amount_is_decimal_string_on_the_wire(adapter, student):
+    loans = {l.loan_id: l for l in await adapter.get_my_loans(student)}
+    assert loans["loan-5002"].model_dump(mode="json")["fine_amount"] == "1.00"
 
 
 # ---------- analytics ----------
@@ -147,9 +193,10 @@ async def test_analytics_librarian_only(adapter, student, librarian):
     with pytest.raises(ToolError) as exc:
         await adapter.get_analytics_summary(student)
     assert exc.value.code == ToolError.PERMISSION_DENIED
-    summary = await adapter.get_analytics_summary(librarian)
-    assert summary.top_waitlisted[0]["resource_id"] == "res-004"
-    assert summary.overdue_summary["overdue_loans"] == 1
+    s = await adapter.get_analytics_summary(librarian)
+    assert (s.total_resources, s.active_loans, s.overdue_loans, s.active_reservations) == (26, 5, 1, 2)
+    assert len(s.popular_resources) == 5
+    assert [p.resource_id for p in s.popular_resources] == sorted(p.resource_id for p in s.popular_resources)
 
 
 # ---------- failure simulation ----------

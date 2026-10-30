@@ -46,7 +46,7 @@ class ScriptedLLM(LLMClient):
 _RES_ID = re.compile(r"\bres-\d+\b")
 _LOAN_ID = re.compile(r"\bloan-\d+\b")
 _OTHER_USER = re.compile(
-    r"\b(u-\d+|another (user|student|person)|other (user|student|people)|someone else|"
+    r"\b((u|user)-\d+|another (user|student|person)|other (user|student|people)|someone else|"
     r"[A-Z][a-z]+'s (loans?|borrow\w*|history|account|reservations?))", re.I)
 _FILLER = re.compile(
     r"\b(is|are|the|a|an|book|books|available|availability|find|search|for|me|please|show|"
@@ -73,7 +73,8 @@ class RuleBasedLLM(LLMClient):
             return final("I can't share another person's borrowing information. I can only show your own account.",
                          "account", abstain="privacy")
 
-        if re.search(r"analytic|waitlist|demand|circulation|utili[sz]ation|catalog gap|overdue trend", low):
+        if re.search(r"analytic|waitlist|demand|circulation|utili[sz]ation|catalog gap|overdue trend|"
+                     r"most borrowed|borrowed the most|popular", low):
             if "get_library_analytics" not in results:
                 return call("get_library_analytics")
             return self._summarize(results, "analytics")
@@ -151,7 +152,7 @@ class RuleBasedLLM(LLMClient):
                           if "loan_id" in i else f"- {i['resource_id']}: {i['status']}" for i in items]
                 continue
             if name == "get_library_analytics":
-                lines += [f"- {w['title']}: {w['waitlist_count']} waiting" for w in data.get("top_waitlisted", [])]
+                lines += [f"- {p['title']}: borrowed {p['loan_count']} times" for p in data.get("popular_resources", [])]
                 continue
             if name == "get_availability":
                 lines.append(f"Available copies: {data['available_copies']} of {data['total_copies']} "

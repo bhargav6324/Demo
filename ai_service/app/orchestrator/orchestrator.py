@@ -217,11 +217,13 @@ def _describe_action(result: ToolResult) -> tuple[str, str]:
     if result.tool == "create_reservation":
         title = d["resource"]["title"]
         a = d["availability"]
-        if a["available_copies"] > 0:
+        if a["available_copies"] > 0 and a["waitlist_count"] == 0:  # waiters have priority
             branch = next((l["branch"] for l in a["locations"] if l["available_copies"] > 0), "the library")
             return "reservation", (f"Reserve '{title}'. {a['available_copies']} of {a['total_copies']} copies are "
                                    f"available now; one will be held for pickup at {branch}.")
-        return "reservation", (f"Reserve '{title}'. No copies are available now; you will join the waitlist "
+        reason = ("No copies are available now" if a["available_copies"] == 0
+                  else "Other patrons are already waiting for the free copies")
+        return "reservation", (f"Reserve '{title}'. {reason}; you will join the waitlist "
                                f"at position {a['waitlist_count'] + 1}.")
     loan = d["loan"]
     new_due = datetime.fromisoformat(d["proposed_due_at"]).date()

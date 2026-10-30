@@ -88,7 +88,7 @@ async def test_student_denied_analytics(executor, adapter, student):
 
 async def test_librarian_gets_analytics(executor, adapter, librarian):
     res = await executor.execute("get_library_analytics", {}, ctx(adapter, librarian), Trace())
-    assert res.ok and res.data["top_waitlisted"][0]["resource_id"] == "res-004"
+    assert res.ok and res.data["total_resources"] == 26 and res.data["popular_resources"]
 
 
 # ---------- execution ----------
@@ -157,7 +157,7 @@ async def test_reservation_precheck_unknown_resource(executor, adapter, student)
 async def test_confirmed_reservation_executes(executor, adapter, student):
     res = await executor.execute("create_reservation", {"resource_id": "res-006"},
                                  ctx(adapter, student, key="idem-1"), Trace(), confirmed=True)
-    assert res.ok and res.data["status"] == "ready_for_pickup"
+    assert res.ok and res.data["status"] == "active"
 
 
 async def test_confirmed_action_requires_idempotency_key(executor, adapter, student):

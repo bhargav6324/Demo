@@ -25,11 +25,15 @@ class LibraryToolAdapter(ABC):
         self,
         ctx: UserContext | None,
         query: str = "",
-        limit: int = 10,
+        limit: int = 20,
         type: str | None = None,
         level: str | None = None,
         updated_since: datetime | None = None,
-    ) -> SearchResult: ...
+        offset: int = 0,
+    ) -> SearchResult:
+        """Backend GET /resources: literal case-insensitive substring match on
+        id/title/description/authors/topics, ordered by updated_at then
+        resource_id, limit 1-100 with offset paging. Not relevance-ranked."""
 
     @abstractmethod
     async def get_resource(self, ctx: UserContext | None, resource_id: str) -> Resource: ...

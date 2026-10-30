@@ -1,12 +1,12 @@
 """Deterministic in-memory backend built from local fixtures.
 
-Behaves like the real backend: same canonical models, same error codes,
-authorization enforced on protected operations, and mutable state for
-reservations/renewals. Failures can be injected per method for testing."""
-import copy
+Mirrors the backend handoff contract: same models, same search semantics
+(literal case-insensitive substring, ordered by updated_at then resource_id,
+limit/offset paging), same authorization and transaction rules, and mutable
+state for reservations/renewals. Failures can be injected per method."""
 import json
-import re
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 
 from app.adapters.base import LibraryToolAdapter
@@ -25,16 +25,8 @@ from app.schemas.library import (
 )
 
 RENEWAL_DAYS = 14
-_STOPWORDS = {
-    "a", "an", "the", "on", "of", "for", "to", "in", "and", "or", "about", "with",
-    "book", "books", "find", "me", "some", "any", "is", "are", "i", "my", "show",
-}
-
-
-def _tokens(text: str) -> list[str]:
-    words = re.findall(r"[a-z0-9]+", text.lower())
-    # Light stemming so "papers" matches "paper"
-    return [w[:-1] if len(w) > 3 and w.endswith("s") else w for w in words if w not in _STOPWORDS]
+MAX_RENEWALS = 2
+MAX_LIMIT = 100
 
 
 class MockLibraryToolAdapter(LibraryToolAdapter):
@@ -70,17 +62,16 @@ class MockLibraryToolAdapter(LibraryToolAdapter):
                 borrowed_at=self.now - timedelta(days=raw["borrowed_days_ago"]),
                 due_at=due_at,
                 renewable=raw["renewable"],
-                fine_amount=raw["fine_amount"],
+                fine_amount=Decimal(raw["fine_amount"]),
                 status="overdue" if due_at < self.now else "active",
             )
-            self.loans[loan.loan_id] = {"user_id": raw["user_id"], "loan": loan}
+            self.loans[loan.loan_id] = {"user_id": raw["user_id"], "loan": loan, "renewals": 0}
 
-        self.reservations: dict[str, dict] = {
-            r["reservation_id"]: {"user_id": r.pop("user_id"), "reservation": Reservation(**r)}
-            for r in copy.deepcopy(circulation["reservations"])
-        }
-        self.analytics_base = self._read("analytics.json")
-        self._idempotency: dict[str, object] = {}
+        self.reservations: dict[str, dict] = {}
+        for raw in circulation["reservations"]:
+            raw = dict(raw)
+            self.reservations[raw["reservation_id"]] = {"user_id": raw.pop("user_id"), "reservation": Reservation(**raw)}
+        self._idempotency: dict[tuple, object] = {}
         self._reservation_seq = 8000
 
     # ---------- helpers ----------
@@ -104,41 +95,27 @@ class MockLibraryToolAdapter(LibraryToolAdapter):
             raise ToolError(ToolError.NOT_FOUND, f"Resource {resource_id} not found.")
         return res
 
-    def _replay(self, key: str):
-        return self._idempotency.get(key)
-
     # ---------- catalog ----------
 
-    async def search_resources(self, ctx, query="", limit=10, type=None, level=None, updated_since=None):
+    async def search_resources(self, ctx, query="", limit=20, type=None, level=None, updated_since=None, offset=0):
         self._maybe_fail("search_resources")
-        q_tokens = set(_tokens(query))
-        scored: list[tuple[float, Resource]] = []
+        if not 1 <= limit <= MAX_LIMIT or offset < 0:
+            raise ToolError(ToolError.INVALID_ARGUMENT, "limit must be 1-100 and offset >= 0.")
+        needle = query.strip().lower()
+        matches = []
         for res in self.resources.values():
             if type and res.type != type:
                 continue
             if level and res.level != level:
                 continue
-            if updated_since and res.updated_at <= updated_since:
+            if updated_since and res.updated_at <= updated_since:  # strictly newer-than
                 continue
-            if not q_tokens:
-                scored.append((0.0, res))
+            haystack = " ".join([res.resource_id, res.title, res.description, *res.authors, *res.topics]).lower()
+            if needle and needle not in haystack:  # literal substring, like the backend
                 continue
-            title = set(_tokens(res.title))
-            topics = set(_tokens(" ".join(res.topics)))
-            authors = set(_tokens(" ".join(res.authors)))
-            desc = set(_tokens(res.description))
-            score = (
-                3 * len(q_tokens & title)
-                + 2 * len(q_tokens & topics)
-                + 2 * len(q_tokens & authors)
-                + 1 * len(q_tokens & desc)
-            )
-            # Require most query terms to appear somewhere, so unrelated titles don't match on one word
-            matched = q_tokens & (title | topics | authors | desc)
-            if score > 0 and len(matched) >= max(1, round(len(q_tokens) * 0.6)):
-                scored.append((score, res))
-        scored.sort(key=lambda s: (-s[0], s[1].resource_id))
-        return SearchResult(items=[r for _, r in scored[:limit]], total=len(scored))
+            matches.append(res)
+        matches.sort(key=lambda r: (r.updated_at, r.resource_id))
+        return SearchResult(items=matches[offset:offset + limit], total=len(matches))
 
     async def get_resource(self, ctx, resource_id):
         self._maybe_fail("get_resource")
@@ -153,17 +130,18 @@ class MockLibraryToolAdapter(LibraryToolAdapter):
     async def get_resource_content(self, ctx, resource_id):
         self._maybe_fail("get_resource_content")
         res = self._resource_or_404(resource_id)
+        if res.access_level != "public" and ctx is None:
+            raise ToolError(ToolError.UNAUTHORIZED, "Authentication required for this content.")
         if not can_access(ctx.role if ctx else None, res.access_level):
             raise ToolError(ToolError.PERMISSION_DENIED, "You are not authorized to read this content.")
         path = self.fixtures_dir / "content" / f"{resource_id}.md"
         if not path.exists():
-            raise ToolError(ToolError.NOT_FOUND, f"No authorized content is available for {resource_id}.")
+            raise ToolError(ToolError.NOT_FOUND, f"No content is available for {resource_id}.")
         return ResourceContent(
             resource_id=res.resource_id,
-            title=res.title,
-            source_type=res.type,
-            access_level=res.access_level,
-            text=path.read_text(encoding="utf-8"),
+            content=path.read_text(encoding="utf-8"),
+            source=f"Synthetic demo repository excerpt: {res.title}",
+            updated_at=res.updated_at,
         )
 
     # ---------- account ----------
@@ -188,25 +166,25 @@ class MockLibraryToolAdapter(LibraryToolAdapter):
     async def create_reservation(self, ctx, resource_id, idempotency_key):
         self._maybe_fail("create_reservation")
         ctx = self._require_auth(ctx)
-        if (prior := self._replay(idempotency_key)) is not None:
+        replay_key = (ctx.user_id, "reserve", idempotency_key)
+        if (prior := self._idempotency.get(replay_key)) is not None:
+            if prior.resource_id != resource_id:
+                raise ToolError(ToolError.CONFLICT, "Idempotency key was already used for another resource.")
             return prior
         self._resource_or_404(resource_id)
 
         for e in self.reservations.values():
             r = e["reservation"]
-            if e["user_id"] == ctx.user_id and r.resource_id == resource_id and r.status in ("waitlisted", "ready_for_pickup"):
-                raise ToolError(ToolError.CONFLICT, "You already have an active reservation for this resource.")
-        for e in self.loans.values():
-            if e["user_id"] == ctx.user_id and e["loan"].resource_id == resource_id and e["loan"].status != "returned":
-                raise ToolError(ToolError.CONFLICT, "You already have this resource on loan.")
+            if e["user_id"] == ctx.user_id and r.resource_id == resource_id and r.status in ("active", "waitlisted"):
+                raise ToolError(ToolError.CONFLICT, "You already have an active or waitlisted hold for this resource.")
 
         avail = self.availability[resource_id]
-        if avail.available_copies > 0:
-            # Hold one copy at the first branch that has stock
+        # A free copy goes to the caller only if nobody is already waiting (FIFO priority)
+        if avail.available_copies > 0 and avail.waitlist_count == 0:
             loc = next(l for l in avail.locations if l.available_copies > 0)
             loc.available_copies -= 1
             avail.available_copies -= 1
-            status, position = "ready_for_pickup", 0
+            status, position = "active", None
         else:
             avail.waitlist_count += 1
             status, position = "waitlisted", avail.waitlist_count
@@ -219,28 +197,39 @@ class MockLibraryToolAdapter(LibraryToolAdapter):
             queue_position=position,
         )
         self.reservations[reservation.reservation_id] = {"user_id": ctx.user_id, "reservation": reservation}
-        self._idempotency[idempotency_key] = reservation
+        self._idempotency[replay_key] = reservation
         return reservation
+
+    def _renewal_blocked(self, entry: dict) -> bool:
+        loan: Loan = entry["loan"]
+        return (
+            loan.status != "active"
+            or loan.fine_amount > 0
+            or entry["renewals"] >= MAX_RENEWALS
+            or self.availability[loan.resource_id].waitlist_count > 0  # another patron is waiting
+        )
 
     async def renew_loan(self, ctx, loan_id, idempotency_key):
         self._maybe_fail("renew_loan")
         ctx = self._require_auth(ctx)
-        if (prior := self._replay(idempotency_key)) is not None:
+        replay_key = (ctx.user_id, "renew", loan_id, idempotency_key)
+        if (prior := self._idempotency.get(replay_key)) is not None:
             return prior
         entry = self.loans.get(loan_id)
-        # Someone else's loan is reported as not found so loan IDs can't be probed
-        if entry is None or entry["user_id"] != ctx.user_id:
+        if entry is None:
             raise ToolError(ToolError.NOT_FOUND, f"Loan {loan_id} not found.")
-        loan: Loan = entry["loan"]
-        if not loan.renewable or loan.status != "active":
+        if entry["user_id"] != ctx.user_id:  # non-owner, including librarians
+            raise ToolError(ToolError.PERMISSION_DENIED, "You can only renew your own loans.")
+        if not entry["loan"].renewable or self._renewal_blocked(entry):
             raise ToolError(ToolError.NOT_RENEWABLE, "This loan is not eligible for renewal.")
-        if self.availability[loan.resource_id].waitlist_count > 0:
-            raise ToolError(ToolError.NOT_RENEWABLE, "This item has a waitlist and cannot be renewed.")
 
-        renewed = loan.model_copy(update={"due_at": loan.due_at + timedelta(days=RENEWAL_DAYS), "renewable": False})
-        entry["loan"] = renewed
-        self._idempotency[idempotency_key] = renewed
-        return renewed
+        entry["renewals"] += 1
+        loan: Loan = entry["loan"]
+        entry["loan"] = loan.model_copy(update={"due_at": loan.due_at + timedelta(days=RENEWAL_DAYS)})
+        # Recompute eligibility for the next renewal (e.g. false after the second one)
+        entry["loan"] = entry["loan"].model_copy(update={"renewable": not self._renewal_blocked(entry)})
+        self._idempotency[replay_key] = entry["loan"]
+        return entry["loan"]
 
     # ---------- analytics ----------
 
@@ -248,29 +237,19 @@ class MockLibraryToolAdapter(LibraryToolAdapter):
         self._maybe_fail("get_analytics_summary")
         ctx = self._require_auth(ctx)
         if not ctx.is_librarian:
-            raise ToolError(ToolError.PERMISSION_DENIED, "Library analytics are available to librarians only.")
+            raise ToolError(ToolError.PERMISSION_DENIED, "Librarian permission is required.")
 
-        waitlisted = sorted(
-            (a for a in self.availability.values() if a.waitlist_count > 0),
-            key=lambda a: -a.waitlist_count,
-        )
-        overdue = [e["loan"] for e in self.loans.values() if e["loan"].status == "overdue"]
+        loans = [e["loan"] for e in self.loans.values()]
+        counts: dict[str, int] = {}
+        for l in loans:  # popularity includes returned history
+            counts[l.resource_id] = counts.get(l.resource_id, 0) + 1
+        popular = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:5]
         return AnalyticsSummary(
-            generated_at=self.now,
-            top_waitlisted=[
-                {
-                    "resource_id": a.resource_id,
-                    "title": self.resources[a.resource_id].title,
-                    "waitlist_count": a.waitlist_count,
-                    "total_copies": a.total_copies,
-                }
-                for a in waitlisted[:5]
-            ],
-            circulation_trend=self.analytics_base["circulation_trend"],
-            overdue_summary={
-                "overdue_loans": len(overdue),
-                "total_outstanding_fines": round(sum(l.fine_amount for l in overdue), 2),
-            },
-            utilization_by_type=self.analytics_base["utilization_by_type"],
-            catalog_gaps=self.analytics_base["catalog_gaps"],
+            total_resources=len(self.resources),
+            active_loans=sum(l.status in ("active", "overdue") for l in loans),
+            overdue_loans=sum(l.status == "overdue" for l in loans),
+            active_reservations=sum(e["reservation"].status in ("active", "waitlisted")
+                                    for e in self.reservations.values()),
+            popular_resources=[{"resource_id": rid, "title": self.resources[rid].title, "loan_count": n}
+                               for rid, n in popular],
         )

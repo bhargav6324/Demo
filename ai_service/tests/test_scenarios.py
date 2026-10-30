@@ -215,10 +215,12 @@ def test_11_student_requests_librarian_analytics_denied(client, audit):
 
 
 def test_11b_librarian_analytics_view(client):
-    d = ask(client, "Which titles have the longest waitlists?", AUTH["librarian"], steps=[
-        call("get_library_analytics"), final("Longest waitlists:", "analytics", [{"resource_id": "res-004"}]),
+    d = ask(client, "Which titles are borrowed the most?", AUTH["librarian"], steps=[
+        call("get_library_analytics"),
+        final("Most borrowed titles:", "analytics", [{"resource_id": "res-001"}, {"resource_id": "res-777"}]),
     ])["data"]
-    assert d["outcome"] == "answered" and d["resources"][0]["resource_id"] == "res-004"
+    assert d["outcome"] == "answered"
+    assert [r["resource_id"] for r in d["resources"]] == ["res-001"]  # from popular_resources; invented id dropped
 
 
 # 12 -----------------------------------------------------------------------------------------

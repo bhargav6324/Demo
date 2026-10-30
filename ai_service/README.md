@@ -207,40 +207,57 @@ Definitions are in [app/tools/definitions.py](app/tools/definitions.py). The che
 
 ## Connecting the real backend
 
+The backend contract is the backend team's `BACKEND_API_HANDOFF.md` (2026-10-30). The backend runs on the backend owner's Mac and is reached over **Tailscale**.
+
 Change `.env` only:
 
 ```env
 TOOL_ADAPTER=http
-BACKEND_BASE_URL=http://localhost:8000
-INDEXER_TOKEN=<service token that can read resource content>
+LIBRARY_API_BASE_URL=http://100.83.115.82:8001/api/v1
 ```
 
-### What changes
+### Before switching
 
-- Tools call the REST API with httpx.
-- The caller's own JWT is forwarded.
-- Reservations and renewals send an `Idempotency-Key` header.
-- Tokens are validated via `GET /auth/me`, cached for 60 seconds.
+1. Tailscale is running on your machine, and the backend Mac shows as active in `tailscale status`.
+2. The backend owner has started the server bound to the Tailscale IP (`--host 100.83.115.82 --port 8001`). If it is bound to `127.0.0.1`, connections time out.
+3. Check reachability: open `http://100.83.115.82:8001/api/v1/health`, or call this service's `GET /api/v1/health` and look for `backend_reachable: true`.
 
-Prompts, tools, orchestration and the public API do not change.
+The backend uses port 8001 on **its** Mac. This AI service also listens on 8001, but on **your** machine, so the two don't clash.
 
-### Assumptions to confirm with the backend team
+### What the HTTP adapter does
 
-1. **`GET /resources/{id}/content`** returns `{resource_id, title, source_type, access_level, text}`. The README does not define this shape.
-2. **`GET /resources?query=&limit=500&updated_since=`** with an empty query lists all resources changed since that time. The index refresh uses this.
-3. **`INDEXER_TOKEN`** is a service token allowed to read content at every access level. Restricted text is filtered per caller at query time. Without this token, only metadata and public content are indexed.
-4. **`GET /analytics/summary`**: any shape is accepted and passed through.
-5. **`GET /auth/me`** returns the canonical user object, or `{user: {...}}`.
-6. **Error codes:** `not_found`, `permission_denied`, `unauthorized`, `conflict`, `not_renewable` and `invalid_argument` are mapped directly. Anything else is mapped from the HTTP status, and 5xx messages are never shown to users.
+- Calls the REST API with httpx and unwraps `{status, data, trace_id}`.
+- Forwards the caller's own JWT. The frontend logs in with `POST /auth/login` and sends that token to this service. There is no shared AI identity.
+- Validates tokens via `GET /auth/me`, cached for 60 seconds.
+- Sends an `Idempotency-Key` on `POST /reservations` and `POST /loans/{id}/renew`. The key is generated once per proposed action and reused on every retry.
+- On `409 database_busy`, retries twice with a short backoff using the same key. If it is still busy, the action stays pending so the user can confirm again safely.
+- Logs the backend `trace_id` on errors. 5xx messages are never shown to users.
 
-The contract is pinned by [tests/fake_backend.py](tests/fake_backend.py) and [tests/test_http_adapter.py](tests/test_http_adapter.py). The same behaviour tests run against both adapters.
+Prompts, tools, orchestration and the public chat API do not change.
+
+### How the backend contract is used
+
+| Contract detail | How the AI service handles it |
+|---|---|
+| `GET /resources?query=` is a literal case-insensitive substring filter ordered by `updated_at`, not by relevance | The `search_catalog` tool sends the whole phrase plus up to 4 keywords as parallel calls (limit 100 each). It merges results by `resource_id` and ranks them locally: title matches first, and most keywords must match. Every result is still a backend record. |
+| `limit` 1–100 with `offset` paging; `updated_since` is strictly newer-than; no tombstones | The index refresh pages 100 at a time and de-duplicates by `resource_id`. It overlaps the time window by 5 minutes, skips unchanged records, and advances the watermark only after all pages succeed. Deleted resources are dropped at query time by re-checking `GET /resources/{id}`. |
+| Content is `{resource_id, content, source, updated_at}`; access levels are `public`, `authenticated` and `restricted` (librarian only) | The tool pairs the content with live catalog metadata for titles and citations. Stored passages are re-checked against the **live** `access_level` before they are shown. |
+| No service identity or AI API key exists | The indexer reads metadata and **public** content anonymously. Other content is fetched live with the caller's token through `get_resource_content`. `INDEXER_TOKEN` is optional. |
+| `/me/profile` returns `courses[]` and `interests[]` | These are merged with the verified caller identity for recommendations. |
+| Reservation status is `active`, `waitlisted`, `cancelled` or `fulfilled`; `queue_position` is set only when waitlisted; existing waiters get priority | Confirmation texts follow these rules. For example, "Other patrons are already waiting… waitlist position N". |
+| Renewal adds 14 days, at most twice; a non-owner gets 403 | Pre-checks use the backend's `renewable` flag. A 403 becomes a refusal. |
+| `fine_amount` is a decimal string | Parsed as `Decimal` and sent back as a string. |
+| Analytics: `total_resources`, `active_loans`, `overdue_loans`, `active_reservations`, `popular_resources[]` | Passed through. Popular titles are grounded as resources and citations. |
+| Error codes: `forbidden`, `duplicate_reservation`, `renewal_not_allowed`, `idempotency_conflict`, `database_busy`, `validation_error`, `internal_error` | Mapped to `permission_denied`, `conflict`, `not_renewable`, `conflict`, retryable `backend_error`, `invalid_argument` and `backend_error`. |
+
+The mock adapter implements the same rules, so mock and HTTP behave the same. This is pinned by [tests/fake_backend.py](tests/fake_backend.py) and [tests/test_http_adapter.py](tests/test_http_adapter.py), which run the shared contract tests against both adapters.
 
 ---
 
 ## Testing
 
 ```bash
-.venv/Scripts/python -m pytest -q                      # 163 tests, no network, no API key, no model download
+.venv/Scripts/python -m pytest -q                      # 184 tests, no network, no API key, no model download
 RUN_MODEL_TESTS=1 .venv/Scripts/python -m pytest -q    # also checks the real MiniLM model
 ```
 
@@ -272,8 +289,9 @@ It reports these metrics over 19 labelled cases in [eval/cases.json](eval/cases.
 | Variable | Default | Notes |
 |---|---|---|
 | `TOOL_ADAPTER` | `mock` | `mock` or `http` |
-| `BACKEND_BASE_URL` | `http://localhost:8000` | `/api/v1` is appended |
-| `BACKEND_TIMEOUT_SECONDS` | `5` | |
+| `LIBRARY_API_BASE_URL` | – | Full API base, e.g. `http://100.83.115.82:8001/api/v1`; takes precedence |
+| `BACKEND_BASE_URL` | `http://100.83.115.82:8001` | Used when `LIBRARY_API_BASE_URL` is unset; `/api/v1` is appended |
+| `BACKEND_TIMEOUT_SECONDS` | `10` | Allows for Tailscale latency |
 | `MOCK_FAILURES` | – | Simulate outages in mock mode, e.g. `get_availability:timeout` or `*:error` |
 | `LLM_PROVIDER` | `gemini` | `gemini` or `fake` |
 | `LLM_MODEL` | `gemini-2.5-flash` | |
@@ -281,7 +299,7 @@ It reports these metrics over 19 labelled cases in [eval/cases.json](eval/cases.
 | `EMBEDDING_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` | or `hashing` |
 | `RAG_MIN_SCORE` | `0.3` | Tuned on this catalog: relevant hits scored 0.44 or higher, unrelated queries 0.18 or lower |
 | `RAG_REFRESH_SECONDS` | `300` | Incremental `updated_since` refresh interval; `0` disables it |
-| `INDEXER_TOKEN` | – | HTTP mode only |
+| `INDEXER_TOKEN` | – | Optional, HTTP mode: token used to index non-public content |
 | `MAX_TOOL_CALLS` | `6` | Per message |
 | `ACTION_TTL_SECONDS` | `300` | Pending action lifetime |
 

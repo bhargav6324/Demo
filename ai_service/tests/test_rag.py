@@ -47,7 +47,7 @@ async def test_every_chunk_has_required_fields(adapter):
     for chunk in r.store._chunks.values():
         assert chunk.chunk_id and chunk.resource_id and chunk.title and chunk.text
         assert chunk.source_type in ("catalog", "document")
-        assert chunk.access_level in ("public", "university", "restricted")
+        assert chunk.access_level in ("public", "authenticated", "restricted")
         assert "type" in chunk.metadata
 
 
@@ -68,16 +68,27 @@ async def test_type_and_level_filters(adapter, student):
     assert res["items"] and all(i["type"] == "paper" for i in res["items"])
 
 
-async def test_restricted_content_hidden_from_students(adapter, student, faculty):
+async def test_restricted_content_librarian_only(adapter, student, faculty, librarian):
     r = make_retriever(adapter)
     q = "hybrid sparse dense retrieval re-ranking library catalog nDCG"
-    student_hit = next(i for i in (await r.search(student, q))["items"] if i["resource_id"] == "res-019")
-    assert student_hit["passages"] == []           # metadata visible, embargoed text not
-    faculty_hit = next(i for i in (await r.search(faculty, q))["items"] if i["resource_id"] == "res-019")
-    assert faculty_hit["passages"]                  # entitled role sees the text
+    for caller in (student, faculty):
+        hit = next(i for i in (await r.search(caller, q))["items"] if i["resource_id"] == "res-019")
+        assert hit["passages"] == []                # metadata visible, restricted text not
+    lib_hit = next(i for i in (await r.search(librarian, q))["items"] if i["resource_id"] == "res-019")
+    assert lib_hit["passages"]                      # librarian is entitled (prototype rule)
 
 
-async def test_university_content_hidden_from_anonymous(adapter):
+async def test_access_level_change_rechecked_at_query_time(adapter, student):
+    r = make_retriever(adapter)
+    await r.refresh()
+    # res-013 was public when indexed; the librarian then restricts it
+    adapter.resources["res-013"] = adapter.resources["res-013"].model_copy(update={"access_level": "restricted"})
+    hit = next(i for i in (await r.search(student, "retrieval-augmented generation"))["items"]
+               if i["resource_id"] == "res-013")
+    assert hit["passages"] == []
+
+
+async def test_authenticated_content_hidden_from_anonymous(adapter):
     r = make_retriever(adapter)
     res = await r.search(None, "Self-RAG reflection tokens critique adaptive retrieval")
     hit = next(i for i in res["items"] if i["resource_id"] == "res-016")
@@ -111,10 +122,27 @@ async def test_incremental_refresh_makes_new_resource_searchable(adapter, studen
         updated_at=datetime(2026, 10, 29, tzinfo=timezone.utc),
     )
     stats = await r.refresh()
-    assert stats["seen"] == 1 and stats["indexed"] == 1    # only the changed record was fetched
+    assert stats["indexed"] == 1                            # only the new record was (re)indexed
+    assert stats["seen"] - stats["unchanged"] == 1          # anything else came from the window overlap
     assert len(r.store) == before + 1
     res = await r.search(student, "graph neural networks message passing")
     assert res["items"][0]["resource_id"] == "res-100"
+
+
+async def test_index_pages_through_catalog_100_at_a_time(adapter):
+    calls = []
+    original = adapter.search_resources
+
+    async def spy(*a, **k):
+        calls.append(k)
+        return await original(*a, **k)
+    adapter.search_resources = spy
+    r = make_retriever(adapter)
+    r.page_limit = 10                      # force several pages with the 26-record fixture
+    stats = await r.refresh()
+    assert stats["seen"] == 26
+    assert [c["offset"] for c in calls] == [0, 10, 20]
+    assert all(c["limit"] <= 100 for c in calls)
 
 
 async def test_backend_outage_during_search_raises_tool_error(student):
