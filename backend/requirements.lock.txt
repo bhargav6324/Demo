@@ -1,4 +1,4 @@
-# Exact Phase 1-4 verification environment (Python 3.14.7, macOS arm64).
+# Exact Phase 1-5 verification environment (Python 3.14.7, macOS arm64).
 # Install the local project separately with: python -m pip install -e . --no-deps
 annotated-doc==0.0.5
 annotated-types==0.8.0

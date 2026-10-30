@@ -1,6 +1,6 @@
 # Backend requirements and contract checklist
 
-This is a working reference derived from the supplied brief. The full source is preserved in [sources/BACKEND_BRIEF.md](sources/BACKEND_BRIEF.md). Phases 1-4 foundation, health, SQLite data, synthetic fixtures, JWT login, identity/profile, and six catalog operations are implemented. Circulation/analytics endpoints remain draft contracts only.
+This is a working reference derived from the supplied brief. The full source is preserved in [sources/BACKEND_BRIEF.md](sources/BACKEND_BRIEF.md). Phases 1-5 foundation, health, SQLite data, synthetic fixtures, JWT login, identity/profile, catalog, and four circulation operations are implemented. Analytics is the only remaining draft endpoint.
 
 ## HTTP conventions
 
@@ -95,3 +95,12 @@ Not part of this contract: frontend screens, LLM features, vector database manag
 - updated_since is strictly newer-than after UTC normalization. API catalog mutation timestamps increase across the catalog, including with fixed/future fixtures or clock rollback. Clients page, overlap sync windows, and deduplicate IDs under concurrent edits.
 - Create/PATCH accept metadata only, with server-owned IDs/timestamps. New resources have zero holdings and no content until provisioned separately.
 - Catalog writes and success audits share one transaction. Content access outcomes and authenticated catalog-write denials are audited. Full authentication/validation audit coverage remains Phase 6 work.
+
+## Phase 5 policy decisions
+
+- Personal lists include only caller-owned records and closed history; effective overdue status/renewability are computed from current UTC time, stored fines/counts, and other-user holds.
+- Reserve allocates a deterministic free holding or joins FIFO. Existing waiters get priority; successful new attempts reconcile available inventory and normalize queue positions. One open reservation per user/resource. No automatic expiry or extra hold cap.
+- Renewal adds 14 days, at most twice, only for the owner. Returned/overdue/target-fined loans and other-user open holds block renewal. Demo fine amounts are stored INR values without automatic accrual or payment.
+- Idempotency keys are 1-128 printable non-whitespace ASCII characters, scoped per user plus operation/loan target. Completed result snapshots/statuses persist until explicit demo reset. Same-key retries get the original effect result and a fresh trace; conflicting reservation payloads return 409. Failed requests do not consume keys.
+- Effects, results, and audits commit atomically under BEGIN IMMEDIATE with savepoints. Busy/locked circulation writes return retryable 409. No checkout, return, cancellation, automatic expiry, or inventory-management API was added.
+- Full details: [circulation policy](../docs/CIRCULATION.md).

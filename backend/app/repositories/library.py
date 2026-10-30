@@ -93,6 +93,30 @@ class CirculationRepository:
     def loan_for_user(self, loan_id: str, user_id: str) -> Loan | None:
         return self.session.scalar(select(Loan).where(Loan.loan_id == loan_id, Loan.user_id == user_id))
 
+    def get_loan(self, loan_id: str) -> Loan | None:
+        return self.session.get(Loan, loan_id)
+
+    def open_reservation(self, user_id: str, resource_id: str) -> Reservation | None:
+        return self.session.scalar(select(Reservation).where(
+            Reservation.user_id == user_id, Reservation.resource_id == resource_id,
+            Reservation.status.in_(["active", "waitlisted"]),
+        ))
+
+    def has_other_hold(self, resource_id: str, user_id: str) -> bool:
+        return self.session.scalar(select(Reservation.reservation_id).where(
+            Reservation.resource_id == resource_id, Reservation.user_id != user_id,
+            Reservation.status.in_(["active", "waitlisted"]),
+        ).limit(1)) is not None
+
+    def waitlist(self, resource_id: str) -> list[Reservation]:
+        return list(self.session.scalars(select(Reservation).where(
+            Reservation.resource_id == resource_id, Reservation.status == "waitlisted",
+        ).order_by(Reservation.queue_position, Reservation.created_at, Reservation.reservation_id)))
+
+    def add_reservation(self, reservation: Reservation):
+        self.session.add(reservation)
+        self.session.flush()
+
     def reservations_for_user(self, user_id: str) -> list[Reservation]:
         return list(self.session.scalars(select(Reservation).where(Reservation.user_id == user_id).order_by(Reservation.reservation_id)))
 

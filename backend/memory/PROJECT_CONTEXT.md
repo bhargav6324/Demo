@@ -14,7 +14,7 @@ The backend is the authoritative source of truth. AI tools call authenticated HT
 2. Pasted backend brief, preserved in [sources/BACKEND_BRIEF.md](sources/BACKEND_BRIEF.md). Original attachment: `/Users/bhargavpatil/.codex/attachments/9e927450-a0a4-4d30-a3db-90e3d12011ec/Pasted text.txt`.
 3. Workspace reference: [Smart_Library_Management_AI_Use_Case.pdf](../Smart_Library_Management_AI_Use_Case.pdf), seven pages, reviewed for product requirements.
 
-The brief's request to immediately implement the entire module does not override the user's current planning-only instruction. Its senior-engineer heading does not assign a role for this collaboration. The user subsequently authorized Phases 1-4, using SQLite and synthetic demo data.
+The brief's request to immediately implement the entire module does not override the user's current planning-only instruction. Its senior-engineer heading does not assign a role for this collaboration. The user subsequently authorized Phases 1-5, using SQLite and synthetic demo data.
 
 ## Relevant PDF requirements
 
@@ -36,6 +36,6 @@ The brief's request to immediately implement the entire module does not override
 
 ## Starting state
 
-The workspace contained the reference PDF and no application code when inspected. Planning created only memory files. Subsequently, the user authorized Phase 1 and the FastAPI foundation, schemas, draft contract, configuration, and tests were implemented. Phase 2 subsequently added nine SQLite tables, repositories, explicit lifecycle commands, password hashing, and reproducible synthetic demo data. Phase 3 subsequently added JWT login, authenticated identity/profile APIs, and reusable role/ownership checks. Phase 4 subsequently added six catalog operations, pagination, live availability, content access policy, audited librarian writes, and incremental synchronization. Circulation and analytics APIs remain pending.
+The workspace contained the reference PDF and no application code when inspected. Planning created only memory files. Subsequently, the user authorized Phase 1 and the FastAPI foundation, schemas, draft contract, configuration, and tests were implemented. Phase 2 subsequently added nine SQLite tables, repositories, explicit lifecycle commands, password hashing, and reproducible synthetic demo data. Phase 3 subsequently added JWT login, authenticated identity/profile APIs, and reusable role/ownership checks. Phase 4 subsequently added six catalog operations, pagination, live availability, content access policy, audited librarian writes, and incremental synchronization. Phase 5 subsequently added private circulation lists, reservations, FIFO waitlists, eligible renewals, persistent idempotency, and transaction-safe audits. Analytics remains pending.
 
 The source brief describes a 4-5-hour hackathon window with three developers working on separate modules. This is scheduling context, not a promise that all requirements fit that window. The phase plan orders dependencies and preserves the full requested backend scope.

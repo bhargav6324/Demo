@@ -4,7 +4,7 @@ This repository contains the Smart Library project modules.
 
 | Module | Location | Status |
 | --- | --- | --- |
-| Backend | [backend/](backend/) | Phases 1-4 implemented; circulation and analytics pending |
+| Backend | [backend/](backend/) | Phases 1-5 implemented; analytics pending |
 
 Backend setup, API usage, demo credentials, and test commands are in [backend/README.md](backend/README.md). Run backend commands from that directory:
 

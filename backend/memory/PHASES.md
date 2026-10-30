@@ -1,6 +1,6 @@
 # Backend implementation phases
 
-Current status: Phases 1-4 complete and verified on 2026-10-30; Phases 5-7 pending.
+Current status: Phases 1-5 complete and verified on 2026-10-30; Phases 6-7 pending.
 
 Scope: backend only. Each phase produces a reviewable result and updates the memory progress log. Tests are added alongside the relevant behavior; the final phase consolidates verification and handoff.
 

@@ -145,6 +145,10 @@ class LoanList(ContractModel):
     items: list[Loan]
 
 
+class RenewalRequest(ContractModel):
+    """Renewal takes no parameters; an optional empty JSON object is accepted."""
+
+
 class ReservationCreate(ContractModel):
     resource_id: StableID
 

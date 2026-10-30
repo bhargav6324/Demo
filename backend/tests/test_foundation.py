@@ -118,7 +118,8 @@ def test_draft_contract_covers_all_operations_without_exposing_runtime_stubs():
     assert set(runtime["paths"]) == {
         "/api/v1/health", "/api/v1/auth/login", "/api/v1/auth/me", "/api/v1/me/profile",
         "/api/v1/resources", "/api/v1/resources/{resource_id}",
-        "/api/v1/resources/{resource_id}/availability", "/api/v1/resources/{resource_id}/content"
+        "/api/v1/resources/{resource_id}/availability", "/api/v1/resources/{resource_id}/content",
+        "/api/v1/me/loans", "/api/v1/me/reservations", "/api/v1/reservations", "/api/v1/loans/{loan_id}/renew"
     }
     draft = create_contract_app().openapi()
     operations = [op for path in draft["paths"].values() for method, op in path.items()

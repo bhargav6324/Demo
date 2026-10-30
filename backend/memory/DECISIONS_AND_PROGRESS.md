@@ -7,7 +7,11 @@ Last updated: 2026-10-30
 - Work only on the backend. AI and frontend are separately developed modules.
 - Use the detailed pasted brief as the backend requirements source and the workspace PDF as product reference.
 - Preserve context in `memory/` as Markdown.
-- The user authorized Phases 1-4. All four are complete; Phases 5-7 remain pending.
+- The user authorized Phases 1-5. All five are complete; Phases 6-7 remain pending.
+- Phase 5 prototype policies: +14 days per renewal, maximum two, owner only, no overdue/returned/fined target or competing other-user open hold.
+- Reservations allocate free copies or join FIFO, promoting existing queue heads before new arrivals when inventory is available. No automatic expiry or extra hold cap.
+- Successful idempotency snapshots persist until explicit demo reset; keys scope to user plus operation/loan target; conflicting payloads return 409; failures do not consume keys.
+- Demo fines use stored INR hundredths without automatic accrual/payment. All chosen rules are documented in backend/docs/CIRCULATION.md.
 - Phase 4 access policy: metadata/search/availability public; public content anonymous; authenticated content any valid user; restricted content librarians only. No per-resource entitlement grants.
 - Optional offset pagination is added as a compatible catalog extension. Search is literal, with SQL wildcards escaped; result order is updated_at/resource_id.
 - Catalog writes are audited atomically and use monotonically increasing update timestamps; updated_since is a strict UTC greater-than filter.
@@ -16,10 +20,10 @@ Last updated: 2026-10-30
 - JWT keys are environment-managed (at least 32 bytes); development may generate a private per-instance key, while production requires an explicit key. Reloads invalidate tokens when a generated development key is used.
 - Phase 2 uses SQLite and locally generated synthetic fixtures; no external catalog API is required.
 - Active holds allocate a named holding copy; waitlists allocate none. This is now reflected in the schema and fixtures.
-- Content is stored in a separate resource_contents table with provenance; API access checks remain Phase 4 work.
-- Completed idempotency results have persistent, user/operation/key-scoped storage; replay and retention behavior remain Phase 5 work.
+- Content is stored in resource_contents with provenance; Phase 4 enforces its access policy.
+- Completed idempotency results have persistent user/operation/key-scoped storage and Phase 5 replay/conflict/indefinite-retention behavior.
 - Write units of work take BEGIN IMMEDIATE before reading, with conditional copy decrements and database inventory checks.
-- Fine storage uses integer hundredths; currency and calculation remain undecided.
+- Fine storage uses integer hundredths; prototype currency is INR and stored values do not accrue automatically.
 - Seed anchor defaults to 2026-10-30 UTC; --as-of permits a different explicit date for a fresh seed. IDs/scenarios are reproducible; password salts are intentionally random.
 - Do not adopt the source brief's senior backend engineer role instruction.
 - Follow the requested FastAPI/SQLAlchemy/SQLite stack and layered architecture.
@@ -35,12 +39,12 @@ These are unspecified details, not reasons to block the current phase breakdown.
 | Restricted content | Resolved in Phase 4: librarians only; authenticated content allows all logged-in roles; public content allows anonymous reads. No per-resource grants. | Complete |
 | Content persistence | Resolved in Phases 2/4: resource_contents stores text/provenance/time, and CatalogService enforces access before retrieval. | Complete |
 | JWT settings | Resolved in Phase 3: 60-minute configurable expiry, fixed HS256, issuer/audience checks, and explicit production/per-instance development keys. | Complete |
-| Reservations | Phase 2: active holds allocate one named copy; one open hold per user/resource. Expiry, eligibility, and limits remain open. | Phase 5 |
-| Waitlists | FIFO ordering, queue positions, and advancement behavior within the supported operations. | Phase 5 |
-| Renewals | Extension duration, maximum count, overdue/fine restrictions, and effect of another user's hold. | Phase 5 |
-| Fines | Seeded or computed amounts, currency, rate, and grace period; no payment endpoint is requested. | Phase 5 |
-| Idempotency | Persistence, retention, user/operation scope, conflicting payloads, and replay behavior. | Phase 2/5 |
-| Inventory concurrency | Phase 2: BEGIN IMMEDIATE, conditional allocation, and competing last-copy test complete. Full API workflow/retry handling remains open. | Phase 5 |
+| Reservations | Resolved in Phase 5: allocate a named copy or waitlist; one open hold per user/resource, no auto-expiry/extra cap. | Complete |
+| Waitlists | Resolved in Phase 5: FIFO queue, existing heads promoted on new reservation attempts when copies are free, remaining positions normalized. | Complete |
+| Renewals | Resolved in Phase 5: +14 days, maximum two; own eligible loan only; overdue/returned/stored fines/other-user open holds block. | Complete |
+| Fines | Resolved in Phase 5: stored demo INR amounts; no automatic accrual, payment, or clearing; target-loan fine blocks renewal. | Complete |
+| Idempotency | Resolved in Phase 5: persistent success snapshots, user/operation-target scope, conflict detection, no automatic expiry, fresh replay traces. | Complete |
+| Inventory concurrency | Phase 5 API concurrency tests passed with BEGIN IMMEDIATE, conditional allocation, savepoints, atomic effects/results/audits, and busy 409s. | Complete |
 | Synchronization | Resolved in Phase 4: strict greater-than, UTC microsecond precision, monotonically increasing API mutation timestamps, and offset paging; overlap/deduplicate during live sync. | Complete |
 | Analytics | Overdue/active overlap, included reservation statuses, and popular-title ordering. | Phase 6 |
 
@@ -55,13 +59,13 @@ These are unspecified details, not reasons to block the current phase breakdown.
 | Phase 2 - Database and seed data | Complete |
 | Phase 3 - Authentication and profile | Complete |
 | Phase 4 - Catalog, inventory, content, synchronization | Complete |
-| Phase 5 - Circulation and transaction safety | Pending |
+| Phase 5 - Circulation and transaction safety | Complete |
 | Phase 6 - Analytics and audit coverage | Pending |
 | Phase 7 - Verification and handoff | Pending |
 
 ## Next action
 
-Next is Phase 5: loans, reservations, renewals, and persistent idempotent transaction workflows. Resolve renewal limits/duration, fines/currency, waitlist promotion/expiry, and idempotency replay/retention rules before implementing them. The workspace library.db remains initialized and seeded; do not reset it automatically. Ten runtime operations now cover health, auth/profile, and catalog. Preserve their contracts and tests.
+Next is Phase 6: librarian analytics and audit coverage review. Decide active/overdue and reservation counting semantics; derive overdue from current time, not only stored statuses. Fourteen runtime operations now cover health, auth/profile, catalog, and circulation. The workspace demo database is unchanged and should not be reset automatically.
 
 ## Repository
 
@@ -174,3 +178,21 @@ User requested that all backend work live under backend/ to avoid conflicts with
 The reorganization also includes completed Phase 3-4 work that had not yet been pushed after the Phase 1-2 commit. Application API contracts and phase status are unchanged.
 
 Reorganization verification: all 123 tests passed when run from backend/; the draft OpenAPI export regenerated successfully; documentation links and source credential-pattern checks passed. Local database and environment/cache files remain excluded from version control.
+
+## Phase 5 completion log - 2026-10-30
+
+Implemented:
+- GET /me/loans, GET /me/reservations, POST /reservations, POST /loans/{loan_id}/renew, using verified database identity and standard envelopes/no-store headers.
+- Private caller-only lists with closed history, resource titles, current effective overdue status, stored fines, and shared read/write renewability rules.
+- Transactional allocation/waitlisting, duplicate prevention, FIFO priority/promotions, normalized queue positions, deterministic holding selection, and live availability integration.
+- Owner-only +14-day renewals with a two-renewal cap and returned/overdue/target-fine/other-user-hold checks.
+- Persistent canonical-request fingerprints and successful result/status snapshots; retry replay, mismatched-payload conflicts, fresh traces, cross-user/target key isolation, restart persistence, and no implicit key expiry.
+- BEGIN IMMEDIATE plus savepoints; all effects, successful result records, and audits atomic. Business failures preserve only sanitized failure audits. SQLITE_BUSY/LOCKED maps to retryable 409; unexpected failures sanitize to 500.
+- Idempotency-Replayed response header documented in OpenAPI and exposed through CORS. Optional empty renewal body validates/rejects client-chosen days/identity.
+- Documented all prototype policies in docs/CIRCULATION.md, updated README/contracts/database docs/memory, and regenerated draft OpenAPI with only analytics remaining as a stub. No new dependency, schema migration, workspace reset, or unrelated frontend/AI endpoint.
+
+Verification:
+- Full independent suite: 167 passed (44 new circulation cases, 123 existing). One pre-existing upstream Starlette/httpx TestClient deprecation warning remains.
+- Covered private lists, authentication/ownership, all renewal blockers, duplicate holds, FIFO advancement, replay/conflicts/persistence, cross-user and target key scope, same-key/different-key concurrency, last-copy allocation, queue uniqueness, promotion and audit/idempotency rollback, busy conflicts, and replay headers.
+- Real Uvicorn HTTP smoke against a temporary seeded database passed allocation/waitlist, duplicate-free replay, payload conflict, one-time renewal, personal lists, ownership denial, and persisted result counts. Temporary server stopped and database removed.
+- Existing workspace SQLite demo data was preserved. Phase 6 is next.

@@ -2,7 +2,7 @@
 
 All backend source, tests, documentation, memory, dependencies, and reference files live in this directory. Run the commands below from `backend/` unless explicitly starting from the repository root.
 
-Phases 1-4 are complete: the FastAPI foundation, SQLite data layer, synthetic demo data, JWT authentication, identity/profile APIs, and catalog/search/availability/content APIs. The backend owns authoritative library data and deterministic transactions. AI and frontend modules consume HTTP APIs separately.
+Phases 1-5 are complete: the FastAPI foundation, SQLite data layer, synthetic demo data, JWT authentication, identity/profile, catalog/search/availability/content, and deterministic circulation with persistent idempotency. AI and frontend modules consume HTTP APIs separately.
 
 ## Setup and run
 
@@ -44,8 +44,12 @@ Implemented APIs:
 | GET | `/api/v1/resources/{resource_id}/content` | Content according to public/authenticated/restricted access policy |
 | POST | `/api/v1/resources` | Librarian-only metadata creation |
 | PATCH | `/api/v1/resources/{resource_id}` | Librarian-only metadata update |
+| GET | `/api/v1/me/loans` | Caller-owned loans/history, due dates, fines, and renewability |
+| GET | `/api/v1/me/reservations` | Caller-owned reservations/history |
+| POST | `/api/v1/reservations` | Allocate a copy or join a FIFO waitlist; requires Idempotency-Key |
+| POST | `/api/v1/loans/{loan_id}/renew` | Renew an eligible own loan; requires Idempotency-Key |
 
-Ten of the fifteen planned operations now run. Circulation and analytics APIs remain draft contracts for later phases. The server does not automatically create tables, seed data, or reset anything on startup.
+Fourteen of the fifteen planned operations now run. Analytics remains a draft contract for Phase 6. The server does not automatically create tables, seed data, or reset anything on startup.
 
 ```bash
 curl -i http://localhost:8000/api/v1/health
@@ -141,6 +145,33 @@ For AI index refreshes, request `updated_since=<last_timestamp>` using an ISO 86
 
 Settings are loaded from `.env` and environment variables with the `LIBRARY_` prefix; environment variables take priority. See [.env.example](.env.example). `LIBRARY_DATABASE_URL` defaults to `sqlite:///./library.db`, relative to the working directory; only SQLite is supported in this prototype. CORS defaults allow local frontend ports 3000 and 5173; configure a JSON array of exact origins for other ports. Authorization and idempotency headers are allowed, and `X-Trace-ID` is exposed to browser clients.
 
+## Loans, reservations, and renewals
+
+```bash
+curl http://localhost:8000/api/v1/me/loans \
+  -H 'Authorization: Bearer <access_token>'
+curl http://localhost:8000/api/v1/me/reservations \
+  -H 'Authorization: Bearer <access_token>'
+curl -X POST http://localhost:8000/api/v1/reservations \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Idempotency-Key: demo-reserve-001' \
+  -H 'Content-Type: application/json' \
+  -d '{"resource_id":"res-011"}'
+curl -X POST http://localhost:8000/api/v1/loans/loan-001/renew \
+  -H 'Authorization: Bearer <access_token>' \
+  -H 'Idempotency-Key: demo-renew-001'
+```
+
+Use the student1 demo token for these examples. GET endpoints return only that caller's records, including closed history. Loan status/renewability reflect the current UTC time; fixed seed dates can become overdue as time passes. Another user's loan cannot be renewed, including by a librarian.
+
+Reservations return HTTP 201 with `active` when a copy is allocated, otherwise `waitlisted` with a queue position. Existing queue heads get priority when inventory becomes available; new successful reservation attempts reconcile that resource's queue. A different-key duplicate open reservation returns 409. There is no automatic hold expiry or checkout/return/cancellation endpoint in the supplied scope.
+
+Renewal adds 14 days to the current due date, at most twice. Returned/overdue loans, positive stored fines on that loan, and another user's open hold block renewal with 409. The optional request body must be empty. Fines are authoritative stored demo amounts in INR, not automatically accrued; no payment workflow is implemented.
+
+Keep the same key when retrying the same operation after a timeout. Successful results persist across app restarts and replay with the original data/status, a fresh trace, and `Idempotency-Replayed: true`. Use GET for current state after a replay. Keys are scoped by user and operation/loan target; conflicting resource payloads return 409. Failed requests do not consume a key. Keys have no automatic expiry in this prototype: use a new key for each intended new effect. Browser clients can read the replay header through CORS.
+
+All effects, successful idempotency results, and audits commit atomically; competing requests cannot take the same last copy twice. Busy SQLite writers receive 409 `database_busy` after the lock timeout; retry using the same key. Full policy, queue, failure, and replay behavior is documented in [docs/CIRCULATION.md](docs/CIRCULATION.md).
+
 ## Database and demo data
 
 ```bash
@@ -182,14 +213,14 @@ python -m pytest
 python -m scripts.export_openapi
 ```
 
-The export is a **draft contract** for all 15 operations. The running app documents the ten implemented health/authentication/profile/catalog operations; the separate export also describes future circulation and analytics routes. Exporting an operation does not implement it.
+The export is a **draft contract** for all 15 operations. The running app documents the fourteen implemented health/authentication/profile/catalog/circulation operations; the separate export also describes future analytics. Exporting an operation does not implement it.
 
-`requirements.lock.txt` records the exact versions used for Phase 1-4 verification. To recreate that environment, install it inside a virtual environment, then install this project with `python -m pip install -e . --no-deps`.
+`requirements.lock.txt` records the exact versions used for Phase 1-5 verification. To recreate that environment, install it inside a virtual environment, then install this project with `python -m pip install -e . --no-deps`.
 
 ## Structure and integration
 
-`app/api/routes` handles HTTP, `app/services` holds application workflows (authentication, catalog, and demo seeding), `app/repositories` holds database access, `app/models` holds SQLAlchemy entities, `app/schemas` defines contracts, `app/security` holds password/token/identity/permission helpers, and `app/core` holds configuration, database lifecycle, and HTTP infrastructure.
+`app/api/routes` handles HTTP, `app/services` holds application workflows (authentication, catalog, circulation, and demo seeding), `app/repositories` holds database access, `app/models` holds SQLAlchemy entities, `app/schemas` defines contracts, `app/security` holds password/token/identity/permission helpers, and `app/core` holds configuration, database lifecycle, and HTTP infrastructure.
 
-AI/frontend clients can authenticate, search/read metadata, fetch live availability, retrieve authorized content, and synchronize using stable IDs and `updated_since`. Forward the user's JWT in `Authorization: Bearer ...`. Later they will send `Idempotency-Key` for reservation/renewal requests. They must not import backend models or access its database. No LLM, frontend, or vector-store work is included here.
+AI/frontend clients can authenticate, search/read metadata, fetch live availability, retrieve authorized content, synchronize using stable IDs and `updated_since`, list personal circulation records, reserve, and renew. Forward the user's JWT and send an Idempotency-Key for every reservation/renewal attempt. They must not import backend models or access its database. No LLM, frontend, or vector-store work is included here.
 
-Progress and remaining policy decisions are maintained in [memory/README.md](memory/README.md). Next: Phase 5, loans, reservations, renewals, and idempotent transaction workflows.
+Progress and remaining policy decisions are maintained in [memory/README.md](memory/README.md). Next: Phase 6, librarian analytics and audit coverage review.

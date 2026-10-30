@@ -1,6 +1,6 @@
 # Backend API contract
 
-Status: Phases 1-4 complete. Ten implemented operations cover health, login, identity/profile, and the six catalog operations. See [openapi.draft.json](openapi.draft.json) for all 15 operations; the five remaining circulation/analytics operations are documentation-only and never mounted in the runtime app. The draft reuses implemented routes.
+Status: Phases 1-5 complete. Fourteen implemented operations cover health, authentication/profile, catalog, and circulation. See [openapi.draft.json](openapi.draft.json) for all 15 operations; analytics is the only remaining documentation-only operation and is never mounted in the runtime app. The draft reuses implemented routes.
 
 ## Shared conventions
 
@@ -8,17 +8,17 @@ Status: Phases 1-4 complete. Ten implemented operations cover health, login, ide
 - Success: `status: "success"`, typed `data`, and `trace_id`.
 - Error: `status: "error"`, `error: {code, message}`, and `trace_id`.
 - Errors include appropriate 400/401/403/404/405/409/422/500 status codes. Validation errors never echo raw values or secrets. Unexpected errors return a generic 500 message.
-- Each request receives a server-generated UUID trace and `X-Trace-ID`. A retried operation gets a new request trace; persistent idempotency semantics will be specified in Phase 5.
+- Each request receives a server-generated UUID trace and `X-Trace-ID`. A retried operation gets a new request trace; successful reservation/renewal results persist and replay with a fresh trace; see docs/CIRCULATION.md.
 - Primary IDs are nonempty, immutable strings, at most 128 characters, using letters, digits, underscores, and hyphens. IDs are server-generated for new catalog records; seed IDs remain stable.
 - Datetimes require timezone information and normalize to UTC (`Z` or `+00:00`) on serialization. Timezone-free inputs are rejected.
 - List responses use `data.items`; resource search also includes `data.total`, counting matches before offset/limit.
-- Authentication uses bearer JWTs, implemented in Phase 3. Runtime identity/profile routes verify the token and load the current database user. Catalog writes and content access enforce their policies now; circulation/analytics enforcement will be added with those routes.
+- Authentication uses bearer JWTs, implemented in Phase 3. Runtime identity/profile routes verify the token and load the current database user. Catalog writes and content access enforce their policies now; circulation ownership is enforced now; analytics enforcement will be added with that route.
 - Catalog writes and analytics are librarian-only. Personal data always derives identity from the verified token. There is no client-authorized `user_id` input.
-- Reservation and renewal require a nonempty `Idempotency-Key` header, max 128 characters. Identity-scoped persistence and conflicting-payload behavior will be finalized before Phase 5.
+- Reservation and renewal require a 1-128 character printable non-whitespace ASCII Idempotency-Key. Successful results persist by verified user and operation/loan target; a conflicting payload returns 409. Replays return original data/status and Idempotency-Replayed: true. Failures do not consume keys; there is no automatic retention expiry.
 
-## Implemented interface behavior and remaining proposals
+## Implemented interface behavior
 
-Catalog and authentication contracts below are implemented. Reservation/renewal/fine workflow details remain proposals for Phase 5.
+Catalog, authentication, and circulation contracts below are implemented. Analytics remains for Phase 6.
 
 - Catalog metadata, search, and availability allow public reads. Public content permits anonymous reads; authenticated content requires any valid user; restricted content requires a librarian. Invalid supplied credentials return 401 even on public content. There is no per-resource entitlement table in this prototype.
 - Search `limit` defaults to 20 (1-100); optional `offset` defaults to 0 (0-2147483647), a backward-compatible extension for paging. `query` matches a trimmed, literal case-insensitive substring across ID, title, description, individual author names, and topics. Whitespace-only queries list all matching records. SQL wildcard characters are escaped. Type/level filters combine with search; results sort by updated_at, then resource_id.
@@ -27,8 +27,8 @@ Catalog and authentication contracts below are implemented. Reservation/renewal/
 - PATCH omits unchanged fields, rejects empty bodies/explicit nulls, and forbids unknown/server-owned fields. Nonempty text fields trim whitespace and reject blank values. Access-level changes apply to subsequent content requests.
 - Login returns the canonical user including courses/interests. `/auth/me` returns identity fields; `/me/profile` returns courses/interests.
 - Content returns resource_id, plain-text content, provenance source, and updated_at from resource_contents. Metadata responses do not include content. Missing resources/content return 404; access checks happen before reading protected excerpts. Content and availability responses disable caching.
-- Renewal proposes returning the updated loan. Reservation creation returns the canonical reservation with HTTP 201. Queue positions start at 1; no queue position is represented by null.
-- `fine_amount` is a nonnegative decimal serialized as a JSON string to preserve precision. Currency, calculation, and renewal restrictions remain unresolved.
+- Renewal returns the updated loan with HTTP 200. Reservation creation returns the canonical reservation with HTTP 201. Queue positions start at 1; no queue position is represented by null. Current-user lists include closed history and cannot select another user with a query parameter.
+- fine_amount is a nonnegative stored decimal serialized as a JSON string. Demo currency is INR; there is no automatic accrual/payment. Target-loan fines, overdue/returned status, two prior renewals, or another user's open hold block renewal. An eligible renewal adds 14 days to the existing due date.
 
 ## Audit and transaction behavior
 
@@ -38,7 +38,7 @@ Catalog and authentication contracts below are implemented. Reservation/renewal/
 
 ## Phase boundaries and unresolved policies
 
-Phases 2-4 added storage, seeds, authentication, and catalog/content. Phase 5 adds circulation; Phase 6 adds analytics. The backend does not implement semantic ranking, RAG, recommendations, frontend screens, or AI tool adapters.
+Phases 2-5 added storage, seeds, authentication, catalog/content, and circulation. Phase 6 adds analytics and reviews audit coverage. The backend does not implement semantic ranking, RAG, recommendations, frontend screens, or AI tool adapters.
 
 ## Implemented authentication behavior
 
@@ -49,10 +49,12 @@ Phases 2-4 added storage, seeds, authentication, and catalog/content. Phase 5 ad
 - Auth success responses and API errors disable caching. Request validation and error logs do not echo passwords or tokens.
 - Signing secrets are environment-managed. Development can use a random per-instance key; production requires an explicit key of at least 32 bytes. Issuer, audience, and token lifetime are configurable. See the README for persistent local configuration and reload behavior.
 
-See [decisions and progress](../memory/DECISIONS_AND_PROGRESS.md) for renewal limits, hold allocation, waitlist advancement, any future expansion beyond librarian-only restricted content, fine policy, idempotency retention, concurrency, and analytics counting decisions. These must be documented before the affected business logic is built.
+See [circulation policy](CIRCULATION.md) for implemented renewal, hold allocation, FIFO advancement, fine, idempotency, and concurrency rules. [Decisions and progress](../memory/DECISIONS_AND_PROGRESS.md) tracks remaining analytics counting decisions and audit review. There is no checkout/return/cancellation/expiry API or automatic fine accrual in this contract.
 
 ## Framework references
 
 Infrastructure follows the official [FastAPI error-handler documentation](https://fastapi.tiangolo.com/tutorial/handling-errors/), [CORS documentation](https://fastapi.tiangolo.com/tutorial/cors/), and [environment settings documentation](https://fastapi.tiangolo.com/advanced/settings/). Authentication uses the [FastAPI JWT guidance](https://fastapi.tiangolo.com/tutorial/security/oauth2-jwt/) and [PyJWT verification API](https://pyjwt.readthedocs.io/en/stable/api.html).
 
 Catalog query implementation follows SQLAlchemy's [literal substring escaping](https://docs.sqlalchemy.org/en/21/core/sqlelement.html) and SQLite [JSON value iteration](https://www.sqlite.org/json1.html) for author/topic arrays.
+
+Phase 5 mutations use immediate write transactions and savepoints to atomically persist effects, promotion/audit records, and completed idempotency snapshots. A busy writer returns 409 database_busy after the SQLite lock timeout. GET endpoints do not promote queues or rewrite statuses. Open loans whose dates have elapsed report overdue and nonrenewable dynamically; cached idempotency responses intentionally remain original snapshots.
