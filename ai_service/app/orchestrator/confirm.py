@@ -43,7 +43,8 @@ async def confirm_action(action_id: str, user: UserContext, actions: ActionStore
         if action.action_type == "reservation":
             msg = (f"Reservation confirmed: '{action.title}' is being held for you to pick up."
                    if d["status"] == "active"
-                   else f"You're on the waitlist for '{action.title}' at position {d['queue_position']}.")
+                   else f"You're on the waitlist for '{action.title}' at position {d['queue_position']}. "
+                        "Positions can change when higher-priority patrons (faculty, then researchers) join.")
             data = ConfirmActionData(**base, transaction_status="succeeded", reservation_id=d["reservation_id"],
                                      message=msg, details=d)
         else:

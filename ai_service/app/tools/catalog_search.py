@@ -54,6 +54,34 @@ def _score(item, phrase: str, kws: list[str]) -> tuple[float, int, bool]:
     return score, matched, phrase_hit
 
 
+WAITLIST_CONCURRENCY = 10
+
+
+async def longest_waitlists(adapter: LibraryToolAdapter, user: UserContext | None, top: int = 5) -> list[dict]:
+    """Rank titles by live waitlist_count. The analytics summary has no waitlist
+    data, so (per the backend team) page the catalog and read each availability."""
+    resources, offset = [], 0
+    while True:
+        page = await adapter.search_resources(user, "", limit=PER_CALL_LIMIT, offset=offset)
+        resources += page.items
+        offset += len(page.items)
+        if not page.items or offset >= page.total:
+            break
+
+    gate = asyncio.Semaphore(WAITLIST_CONCURRENCY)  # don't flood the backend with 60+ parallel calls
+
+    async def availability(r):
+        async with gate:
+            return r, await adapter.get_availability(user, r.resource_id)
+
+    rows = await asyncio.gather(*(availability(r) for r in resources))
+    waiting = sorted((row for row in rows if row[1].waitlist_count > 0),
+                     key=lambda row: (-row[1].waitlist_count, row[0].resource_id))
+    return [{"resource_id": r.resource_id, "title": r.title, "waitlist_count": a.waitlist_count,
+             "available_copies": a.available_copies, "total_copies": a.total_copies}
+            for r, a in waiting[:top]]
+
+
 async def search_catalog(adapter: LibraryToolAdapter, user: UserContext | None, query: str, *,
                          limit: int = 5, type: str | None = None, level: str | None = None) -> dict:
     phrase = query.strip().lower()

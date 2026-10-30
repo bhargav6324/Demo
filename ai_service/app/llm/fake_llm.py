@@ -77,7 +77,7 @@ class RuleBasedLLM(LLMClient):
                      r"most borrowed|borrowed the most|popular", low):
             if "get_library_analytics" not in results:
                 return call("get_library_analytics")
-            return self._summarize(results, "analytics")
+            return self._summarize(results, "analytics", intent_hint="waitlist" if "waitlist" in low else None)
 
         if "renew" in low:
             if m := _LOAN_ID.search(text):
@@ -132,7 +132,7 @@ class RuleBasedLLM(LLMClient):
         return self._summarize(results, "search")
 
     @staticmethod
-    def _summarize(results: dict, intent: str, only_top: bool = False) -> ToolCall:
+    def _summarize(results: dict, intent: str, only_top: bool = False, intent_hint: str | None = None) -> ToolCall:
         """Compose an answer purely from tool output."""
         for name, r in results.items():
             if r.get("status") == "confirmation_required":
@@ -152,7 +152,16 @@ class RuleBasedLLM(LLMClient):
                           if "loan_id" in i else f"- {i['resource_id']}: {i['status']}" for i in items]
                 continue
             if name == "get_library_analytics":
-                lines += [f"- {p['title']}: borrowed {p['loan_count']} times" for p in data.get("popular_resources", [])]
+                if intent_hint == "waitlist":
+                    lines += [f"- {w['title']}: {w['waitlist_count']} waiting" for w in data.get("longest_waitlists", [])]
+                    lines = lines or ["- No titles currently have a waitlist."]
+                else:
+                    lines += [f"- {p['title']}: borrowed {p['loan_count']} times"
+                              for p in data.get("popular_resources", [])]
+                    lines.append(f"Active loans: {data.get('active_loans')}, overdue: {data.get('overdue_loans')}, "
+                                 f"open holds: {data.get('active_reservations')}.")
+                for row in data.get("longest_waitlists" if intent_hint == "waitlist" else "popular_resources", []):
+                    resources.append({"resource_id": row["resource_id"], "reason": "From library analytics."})
                 continue
             if name == "get_availability":
                 lines.append(f"Available copies: {data['available_copies']} of {data['total_copies']} "

@@ -244,8 +244,11 @@ Prompts, tools, orchestration and the public chat API do not change.
 | Content is `{resource_id, content, source, updated_at}`; access levels are `public`, `authenticated` and `restricted` (librarian only) | The tool pairs the content with live catalog metadata for titles and citations. Stored passages are re-checked against the **live** `access_level` before they are shown. |
 | No service identity or AI API key exists | The indexer reads metadata and **public** content anonymously. Other content is fetched live with the caller's token through `get_resource_content`. `INDEXER_TOKEN` is optional. |
 | `/me/profile` returns `courses[]` and `interests[]` | These are merged with the verified caller identity for recommendations. |
-| Reservation status is `active`, `waitlisted`, `cancelled` or `fulfilled`; `queue_position` is set only when waitlisted; existing waiters get priority | Confirmation texts follow these rules. For example, "Other patrons are already waiting… waitlist position N". |
-| Renewal adds 14 days, at most twice; a non-owner gets 403 | Pre-checks use the backend's `renewable` flag. A 403 becomes a refusal. |
+| Reservation status is `active`, `waitlisted`, `cancelled` or `fulfilled`; `queue_position` is set only when waitlisted | Confirmation texts use the returned status and position. |
+| Priority waitlist: faculty, then researcher, then student, first-come within a role; a new request is ranked before a free copy is handed out | The preview shows the live queue size and says the position is confirmed by the library. The confirmation shows the real `queue_position` and notes that it can change. The mock adapter implements the same queue. |
+| Only students, faculty and researchers may reserve or renew; librarians get 403 | `create_reservation` and `renew_loan` are restricted to patron roles, so librarians are refused before any backend call. |
+| Renewal adds 28 days for faculty and 14 for students and researchers, at most twice; a non-owner gets 403 | The preview shows the role's period and the new due date. Pre-checks use the backend's `renewable` flag. A 403 becomes a refusal. |
+| Analytics has no waitlist data ("rank availability by `waitlist_count`") | `get_library_analytics` adds `longest_waitlists`, built by paging the catalog and reading live availability (at most 10 requests at a time). |
 | `fine_amount` is a decimal string | Parsed as `Decimal` and sent back as a string. |
 | Analytics: `total_resources`, `active_loans`, `overdue_loans`, `active_reservations`, `popular_resources[]` | Passed through. Popular titles are grounded as resources and citations. |
 | Error codes: `forbidden`, `duplicate_reservation`, `renewal_not_allowed`, `idempotency_conflict`, `database_busy`, `validation_error`, `internal_error` | Mapped to `permission_denied`, `conflict`, `not_renewable`, `conflict`, retryable `backend_error`, `invalid_argument` and `backend_error`. |
@@ -257,7 +260,7 @@ The mock adapter implements the same rules, so mock and HTTP behave the same. Th
 ## Testing
 
 ```bash
-.venv/Scripts/python -m pytest -q                      # 184 tests, no network, no API key, no model download
+.venv/Scripts/python -m pytest -q                      # 194 tests, no network, no API key, no model download
 RUN_MODEL_TESTS=1 .venv/Scripts/python -m pytest -q    # also checks the real MiniLM model
 ```
 

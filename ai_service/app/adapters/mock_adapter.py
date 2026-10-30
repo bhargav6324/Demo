@@ -23,8 +23,8 @@ from app.schemas.library import (
     SearchResult,
     User,
 )
+from app.tools.policy import PATRON_ROLES, QUEUE_RANK, renewal_days
 
-RENEWAL_DAYS = 14
 MAX_RENEWALS = 2
 MAX_LIMIT = 100
 
@@ -73,6 +73,48 @@ class MockLibraryToolAdapter(LibraryToolAdapter):
             self.reservations[raw["reservation_id"]] = {"user_id": raw.pop("user_id"), "reservation": Reservation(**raw)}
         self._idempotency: dict[tuple, object] = {}
         self._reservation_seq = 8000
+        self._queue_seq = 0
+        self._build_queues()
+
+    def _build_queues(self) -> None:
+        """Per-resource priority waitlist. Fixture waitlist counts include patrons we
+        have no records for; they are modelled as earlier-arriving students."""
+        self.queues: dict[str, list[dict]] = {}
+        for rid, avail in self.availability.items():
+            known = [(rsv_id, e["user_id"]) for rsv_id, e in self.reservations.items()
+                     if e["reservation"].resource_id == rid and e["reservation"].status == "waitlisted"]
+            queue = [self._queue_entry(None, None) for _ in range(max(0, avail.waitlist_count - len(known)))]
+            queue += [self._queue_entry(uid, rsv_id) for rsv_id, uid in known]
+            self.queues[rid] = queue
+            self._settle_queue(rid, promote=False)  # keep fixture inventory exactly as loaded
+
+    def _queue_entry(self, user_id: str | None, reservation_id: str | None) -> dict:
+        self._queue_seq += 1
+        role = self.users[user_id].role if user_id in self.users else "student"
+        return {"user_id": user_id, "rank": QUEUE_RANK.get(role, 2), "seq": self._queue_seq,
+                "reservation_id": reservation_id}
+
+    def _settle_queue(self, resource_id: str, promote: bool = True) -> None:
+        """Order by role priority then arrival, hand free copies to the front of the
+        queue, then renumber positions (backend rule: faculty > researcher > student)."""
+        queue = self.queues[resource_id]
+        queue.sort(key=lambda e: (e["rank"], e["seq"]))
+        avail = self.availability[resource_id]
+        while promote and avail.available_copies > 0 and queue:
+            promoted = queue.pop(0)
+            loc = next(l for l in avail.locations if l.available_copies > 0)
+            loc.available_copies -= 1
+            avail.available_copies -= 1
+            if promoted["reservation_id"] in self.reservations:
+                entry = self.reservations[promoted["reservation_id"]]
+                entry["reservation"] = entry["reservation"].model_copy(update={"status": "active",
+                                                                               "queue_position": None})
+        avail.waitlist_count = len(queue)
+        for position, e in enumerate(queue, start=1):
+            if e["reservation_id"] in self.reservations:
+                entry = self.reservations[e["reservation_id"]]
+                entry["reservation"] = entry["reservation"].model_copy(update={"status": "waitlisted",
+                                                                               "queue_position": position})
 
     # ---------- helpers ----------
 
@@ -163,9 +205,15 @@ class MockLibraryToolAdapter(LibraryToolAdapter):
 
     # ---------- transactions ----------
 
+    def _require_patron(self, ctx: UserContext | None) -> UserContext:
+        ctx = self._require_auth(ctx)
+        if ctx.role not in PATRON_ROLES:
+            raise ToolError(ToolError.PERMISSION_DENIED, "Librarians cannot reserve or renew items.")
+        return ctx
+
     async def create_reservation(self, ctx, resource_id, idempotency_key):
         self._maybe_fail("create_reservation")
-        ctx = self._require_auth(ctx)
+        ctx = self._require_patron(ctx)
         replay_key = (ctx.user_id, "reserve", idempotency_key)
         if (prior := self._idempotency.get(replay_key)) is not None:
             if prior.resource_id != resource_id:
@@ -178,25 +226,15 @@ class MockLibraryToolAdapter(LibraryToolAdapter):
             if e["user_id"] == ctx.user_id and r.resource_id == resource_id and r.status in ("active", "waitlisted"):
                 raise ToolError(ToolError.CONFLICT, "You already have an active or waitlisted hold for this resource.")
 
-        avail = self.availability[resource_id]
-        # A free copy goes to the caller only if nobody is already waiting (FIFO priority)
-        if avail.available_copies > 0 and avail.waitlist_count == 0:
-            loc = next(l for l in avail.locations if l.available_copies > 0)
-            loc.available_copies -= 1
-            avail.available_copies -= 1
-            status, position = "active", None
-        else:
-            avail.waitlist_count += 1
-            status, position = "waitlisted", avail.waitlist_count
-
+        # The caller is ranked against existing waiters *before* any free copy is promoted
         self._reservation_seq += 1
-        reservation = Reservation(
-            reservation_id=f"rsv-{self._reservation_seq}",
-            resource_id=resource_id,
-            status=status,
-            queue_position=position,
-        )
-        self.reservations[reservation.reservation_id] = {"user_id": ctx.user_id, "reservation": reservation}
+        rsv_id = f"rsv-{self._reservation_seq}"
+        self.reservations[rsv_id] = {"user_id": ctx.user_id, "reservation": Reservation(
+            reservation_id=rsv_id, resource_id=resource_id, status="waitlisted", queue_position=None)}
+        self.queues.setdefault(resource_id, []).append(self._queue_entry(ctx.user_id, rsv_id))
+        self._settle_queue(resource_id)
+
+        reservation = self.reservations[rsv_id]["reservation"]
         self._idempotency[replay_key] = reservation
         return reservation
 
@@ -211,7 +249,7 @@ class MockLibraryToolAdapter(LibraryToolAdapter):
 
     async def renew_loan(self, ctx, loan_id, idempotency_key):
         self._maybe_fail("renew_loan")
-        ctx = self._require_auth(ctx)
+        ctx = self._require_patron(ctx)
         replay_key = (ctx.user_id, "renew", loan_id, idempotency_key)
         if (prior := self._idempotency.get(replay_key)) is not None:
             return prior
@@ -225,7 +263,7 @@ class MockLibraryToolAdapter(LibraryToolAdapter):
 
         entry["renewals"] += 1
         loan: Loan = entry["loan"]
-        entry["loan"] = loan.model_copy(update={"due_at": loan.due_at + timedelta(days=RENEWAL_DAYS)})
+        entry["loan"] = loan.model_copy(update={"due_at": loan.due_at + timedelta(days=renewal_days(ctx.role))})
         # Recompute eligibility for the next renewal (e.g. false after the second one)
         entry["loan"] = entry["loan"].model_copy(update={"renewable": not self._renewal_blocked(entry)})
         self._idempotency[replay_key] = entry["loan"]

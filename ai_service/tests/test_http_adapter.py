@@ -220,7 +220,22 @@ def test_build_adapter_switch_is_config_only():
     adapter, identity = build_adapter(Settings(_env_file=None, tool_adapter="http",
                                                backend_base_url="http://localhost:8000"))
     assert isinstance(adapter, HttpLibraryToolAdapter) and isinstance(identity, HttpIdentityAdapter)
-    assert str(adapter._client.base_url).rstrip("/") == "http://localhost:8000/api/v1"
+    assert adapter.api_url == "http://localhost:8000/api/v1"
+
+
+def test_library_api_base_url_takes_precedence():
+    adapter, _ = build_adapter(Settings(_env_file=None, tool_adapter="http",
+                                        library_api_base_url="http://100.83.115.82:8001/api/v1/"))
+    assert adapter.api_url == "http://100.83.115.82:8001/api/v1"
+
+
+def test_adapter_works_across_event_loops(backend):
+    """Index refresh at startup and requests may run on different loops (tests, scripts)."""
+    import asyncio
+
+    adapter = HttpLibraryToolAdapter(API, transport=backend.transport)
+    for _ in range(3):
+        assert asyncio.run(adapter.get_resource(None, "res-001")).title == "Python Crash Course"
 
 
 # ======================================================================= full app in http mode

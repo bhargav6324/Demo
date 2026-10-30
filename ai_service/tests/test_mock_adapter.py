@@ -123,10 +123,42 @@ async def test_reservation_available_item_holds_copy(adapter, student):
     assert (await adapter.get_availability(None, "res-006")).available_copies == before - 1
 
 
-async def test_existing_waiters_get_priority(adapter, student):
-    # res-010 has 1 free copy but 1 person already waiting -> new request joins the queue
+async def test_earlier_student_beats_new_student(adapter, student):
+    # res-010: 1 free copy, 1 student already waiting. Ranked first, then promoted:
+    # the earlier student gets the copy; the new student is next in line.
     rsv = await adapter.create_reservation(student, "res-010", "key-w")
-    assert rsv.status == "waitlisted" and rsv.queue_position == 2
+    assert rsv.status == "waitlisted" and rsv.queue_position == 1
+    assert (await adapter.get_availability(None, "res-010")).available_copies == 0
+
+
+async def test_faculty_ranks_before_waiting_students(adapter, faculty):
+    # Same situation, but a faculty member outranks the waiting student and gets the copy
+    rsv = await adapter.create_reservation(faculty, "res-010", "key-f")
+    assert rsv.status == "active" and rsv.queue_position is None
+
+
+async def test_faculty_joins_queue_ahead_of_students(adapter, student2, faculty):
+    # res-004: no copies, 6 waiting (students, incl. student2 at the back)
+    rsv = await adapter.create_reservation(faculty, "res-004", "key-f2")
+    assert rsv.status == "waitlisted" and rsv.queue_position == 1
+    mine = {r.resource_id: r for r in await adapter.get_my_reservations(student2)}
+    assert mine["res-004"].queue_position == 7  # pushed back by the faculty request
+
+
+async def test_librarians_cannot_reserve_or_renew(adapter, librarian):
+    for call in (adapter.create_reservation(librarian, "res-006", "k"),
+                 adapter.renew_loan(librarian, "loan-5001", "k")):
+        with pytest.raises(ToolError) as exc:
+            await call
+        assert exc.value.code == ToolError.PERMISSION_DENIED
+
+
+async def test_faculty_renewal_is_28_days(adapter, faculty):
+    adapter.availability["res-010"].waitlist_count = 0  # nobody waiting, so renewal is allowed
+    adapter.queues["res-010"] = []
+    before = {l.loan_id: l for l in await adapter.get_my_loans(faculty)}["loan-5005"]
+    renewed = await adapter.renew_loan(faculty, "loan-5005", "f-1")
+    assert (renewed.due_at - before.due_at).days == 28
 
 
 async def test_reservation_unavailable_item_joins_waitlist(adapter, student):

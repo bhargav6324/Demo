@@ -58,10 +58,25 @@ def _seg(value: str) -> str:
 
 class HttpLibraryToolAdapter(LibraryToolAdapter):
     def __init__(self, api_url: str, timeout: float = 5.0, transport: httpx.AsyncBaseTransport | None = None):
-        self._client = httpx.AsyncClient(base_url=api_url.rstrip("/"), timeout=timeout, transport=transport)
+        self.api_url = api_url.rstrip("/")
+        self._timeout = timeout
+        self._transport = transport
+        # An AsyncClient's connection pool belongs to the event loop that created it, so
+        # keep one per loop (uvicorn has one; tests and scripts may run several).
+        self._clients: dict[int, httpx.AsyncClient] = {}
+
+    def _client(self) -> httpx.AsyncClient:
+        loop_id = id(asyncio.get_running_loop())
+        client = self._clients.get(loop_id)
+        if client is None or client.is_closed:
+            client = httpx.AsyncClient(base_url=self.api_url, timeout=self._timeout, transport=self._transport)
+            self._clients[loop_id] = client
+        return client
 
     async def aclose(self) -> None:
-        await self._client.aclose()
+        client = self._clients.pop(id(asyncio.get_running_loop()), None)
+        if client is not None:
+            await client.aclose()
 
     # ------------------------------------------------------------ transport
 
@@ -77,7 +92,7 @@ class HttpLibraryToolAdapter(LibraryToolAdapter):
 
         for delay in (*_BUSY_RETRY_DELAYS, None):
             try:
-                resp = await self._client.request(method, path, params=params, json=json, headers=headers)
+                resp = await self._client().request(method, path, params=params, json=json, headers=headers)
             except httpx.TimeoutException as e:
                 # Outcome unknown: the caller keeps the idempotency key and may retry safely
                 raise ToolError(ToolError.BACKEND_TIMEOUT, "Library backend did not respond in time.") from e

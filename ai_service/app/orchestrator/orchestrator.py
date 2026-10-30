@@ -37,6 +37,9 @@ _DENIAL_TEXT = {
     ToolError.PERMISSION_DENIED: "Sorry, that information isn't available for your role.",
     ToolError.UNAUTHORIZED: "Please sign in to access your library account.",
 }
+_ACTION_TOOLS = {"create_reservation", "renew_loan"}
+_ACTION_DENIAL_TEXT = ("Reservations and renewals can only be made by students, faculty and researchers "
+                       "for their own account; librarian accounts administer the library and can't place them.")
 _OUTAGE_CODES = ToolError.RETRYABLE
 
 
@@ -163,7 +166,9 @@ class Orchestrator:
             outcome = "refused"
             resources = []
             if denied:
-                message = _DENIAL_TEXT[denied.error_code]
+                message = (_ACTION_DENIAL_TEXT if denied.tool in _ACTION_TOOLS
+                           and denied.error_code == ToolError.PERMISSION_DENIED
+                           else _DENIAL_TEXT[denied.error_code])
             elif abstain == "privacy":
                 message = PRIVACY_REFUSAL
         elif outage:
@@ -217,16 +222,19 @@ def _describe_action(result: ToolResult) -> tuple[str, str]:
     if result.tool == "create_reservation":
         title = d["resource"]["title"]
         a = d["availability"]
-        if a["available_copies"] > 0 and a["waitlist_count"] == 0:  # waiters have priority
+        if a["available_copies"] > 0 and a["waitlist_count"] == 0:
             branch = next((l["branch"] for l in a["locations"] if l["available_copies"] > 0), "the library")
             return "reservation", (f"Reserve '{title}'. {a['available_copies']} of {a['total_copies']} copies are "
                                    f"available now; one will be held for pickup at {branch}.")
-        reason = ("No copies are available now" if a["available_copies"] == 0
-                  else "Other patrons are already waiting for the free copies")
-        return "reservation", (f"Reserve '{title}'. {reason}; you will join the waitlist "
-                               f"at position {a['waitlist_count'] + 1}.")
+        # The priority queue (faculty > researcher > student, FIFO within a role) means the
+        # exact position is only known after the backend places the hold.
+        situation = ("No copies are available now" if a["available_copies"] == 0
+                     else "Copies are free, but other patrons are already waiting for them")
+        return "reservation", (f"Reserve '{title}'. {situation}; {a['waitlist_count']} already waiting. "
+                               "Your request joins the priority waitlist (faculty, then researchers, then "
+                               "students) and the library confirms your position.")
     loan = d["loan"]
     new_due = datetime.fromisoformat(d["proposed_due_at"]).date()
     old_due = datetime.fromisoformat(loan["due_at"]).date()
-    return "renewal", (f"Renew '{loan['resource_title']}' (loan {loan['loan_id']}). "
-                       f"Due date moves from {old_due} to {new_due}.")
+    return "renewal", (f"Renew '{loan['resource_title']}' (loan {loan['loan_id']}) for "
+                       f"{d.get('renewal_days', 14)} more days. Due date moves from {old_due} to {new_due}.")
